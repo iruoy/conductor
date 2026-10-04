@@ -1,6 +1,6 @@
 defmodule ConductorWeb.ConfigLive do
   use ConductorWeb, :live_view
-  alias Conductor.{Config, Runner}
+  alias Conductor.{Config, GitHub, Runner}
   alias Conductor.Config.{Project, Repository, Settings}
 
   @reasoning ~w(off minimal low medium high xhigh)
@@ -13,7 +13,7 @@ defmodule ConductorWeb.ConfigLive do
      socket
      |> assign(page_title: "Config", reasoning: @reasoning, models: [], models_error: nil)
      |> assign_settings(settings)
-     |> assign(repo_form: nil, project_form: nil)
+     |> assign(repo_form: nil, project_form: nil, github_repos: nil, github_repos_error: nil)
      |> load_lists()
      |> load_models()}
   end
@@ -90,15 +90,36 @@ defmodule ConductorWeb.ConfigLive do
         phx-submit="save_repo"
         class="rounded-box border border-base-300 p-4"
       >
+        <p :if={@github_repos_error} class="mb-2 text-sm text-warning">
+          Could not list the repositories from GitHub ({@github_repos_error}); enter one by hand.
+        </p>
         <div class="grid gap-x-6 sm:grid-cols-2">
-          <.input field={@repo_form[:name]} label="Name" placeholder="shop-api" />
-          <.input
-            field={@repo_form[:clone_url]}
-            label="Clone URL"
-            placeholder="git@github.com:acme/shop-api.git"
-          />
-          <.input field={@repo_form[:owner]} label="GitHub owner" placeholder="acme" />
-          <.input field={@repo_form[:slug]} label="Repository name" placeholder="shop-api" />
+          <%= if @github_repos do %>
+            <.input
+              type="select"
+              id="repo-github"
+              name="repository[github]"
+              label="GitHub repository"
+              value={@repo_form.params["github"]}
+              options={Enum.map(@github_repos, & &1["full_name"])}
+              prompt="Choose a repository"
+              required
+            />
+            <.input
+              field={@repo_form[:name]}
+              label="Name"
+              placeholder="the repository's name on GitHub"
+            />
+          <% else %>
+            <.input field={@repo_form[:name]} label="Name" placeholder="shop-api" />
+            <.input
+              field={@repo_form[:clone_url]}
+              label="Clone URL"
+              placeholder="git@github.com:acme/shop-api.git"
+            />
+            <.input field={@repo_form[:owner]} label="GitHub owner" placeholder="acme" />
+            <.input field={@repo_form[:slug]} label="Repository name" placeholder="shop-api" />
+          <% end %>
           <.input
             field={@repo_form[:base_branch]}
             label="Base branch"
@@ -283,12 +304,18 @@ defmodule ConductorWeb.ConfigLive do
 
   def handle_event("edit_repo", %{"id" => id}, socket) do
     repo = if id == "new", do: %Repository{}, else: Config.get_repo!(id)
-    {:noreply, assign(socket, repo: repo, repo_form: to_form(Config.change_repo(repo)))}
+
+    {:noreply,
+     socket
+     |> assign(repo: repo, repo_form: to_form(Config.change_repo(repo)))
+     |> load_github_repos()}
   end
 
   def handle_event("cancel_repo", _params, socket), do: {:noreply, assign(socket, repo_form: nil)}
 
   def handle_event("save_repo", %{"repository" => params}, socket) do
+    params = github_repo_params(socket.assigns.github_repos, params)
+
     result =
       case socket.assigns.repo do
         %Repository{id: nil} -> Config.create_repo(params)
@@ -365,6 +392,28 @@ defmodule ConductorWeb.ConfigLive do
 
   defp load_lists(socket),
     do: assign(socket, repos: Config.list_repos(), projects: Config.list_projects())
+
+  # A new repository is chosen from the token account's repositories; an existing one is edited by hand.
+  defp load_github_repos(%{assigns: %{repo: %Repository{id: nil}}} = socket) do
+    case GitHub.repositories() do
+      {:ok, repos} -> assign(socket, github_repos: repos, github_repos_error: nil)
+      {:error, reason} -> assign(socket, github_repos: nil, github_repos_error: reason)
+    end
+  end
+
+  defp load_github_repos(socket), do: assign(socket, github_repos: nil, github_repos_error: nil)
+
+  # The chosen repository decides where it lives on GitHub; its name there is the default name.
+  defp github_repo_params(nil, params), do: params
+
+  defp github_repo_params(github_repos, params) do
+    chosen = Enum.find(github_repos, %{}, &(&1["full_name"] == params["github"]))
+    name = if params["name"] in [nil, ""], do: chosen["name"], else: params["name"]
+
+    params
+    |> Map.merge(Map.take(chosen, ["owner", "slug", "clone_url"]))
+    |> Map.put("name", name)
+  end
 
   defp load_models(socket) do
     if connected?(socket) do

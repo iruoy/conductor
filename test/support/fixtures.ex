@@ -105,8 +105,8 @@ defmodule Conductor.Fixtures do
 
   @doc """
   GitHub stubs for repository `acme/shop` in project `acme/1`: the project holds `issues` (maps with `number` and
-  `title`, optionally `priority`), every issue is in `status`, every branch exists unless `branch_exists: false`, and
-  every PR is created anew. Status changes are sent to the test as `{:github_status, item, option}`.
+  `title`, optionally `priority`), every issue is in `status`, the account's only repository is `acme/shop`, every
+  branch exists unless `branch_exists: false`, and every PR is created anew. Status changes are sent to the test as `{:github_status, item, option}`.
   """
   def stub_github(opts \\ []) do
     test = self()
@@ -145,6 +145,17 @@ defmodule Conductor.Fixtures do
             end
 
           Req.Test.json(conn, %{"data" => data})
+
+        {"GET", ["user", "repos"]} ->
+          Req.Test.json(conn, [
+            %{
+              "full_name" => "acme/shop",
+              "name" => "shop",
+              "owner" => %{"login" => "acme"},
+              "ssh_url" => "git@github.com:acme/shop.git",
+              "archived" => false
+            }
+          ])
 
         {"GET", ["repos", "acme", "shop", "branches" | _branch]} ->
           if branch_exists,

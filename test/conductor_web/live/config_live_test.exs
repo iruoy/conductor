@@ -7,6 +7,7 @@ defmodule ConductorWeb.ConfigLiveTest do
   @moduletag :tmp_dir
 
   test "manages repositories, projects, and settings", %{conn: conn, tmp_dir: dir} do
+    stub_github()
     start_workers(dir)
     {:ok, view, _html} = live(conn, ~p"/config")
 
@@ -14,16 +15,19 @@ defmodule ConductorWeb.ConfigLiveTest do
 
     view
     |> form("#repo-form",
-      repository: %{
-        name: "shop",
-        clone_url: "git@x:acme/shop.git",
-        owner: "acme",
-        slug: "shop"
-      }
+      repository: %{github: "acme/shop", test_command: "mix test"}
     )
     |> render_submit()
 
-    assert [%{name: "shop"} = repo] = Config.list_repos()
+    # The repository is chosen from the token account's repositories on GitHub.
+    assert [
+             %{
+               name: "shop",
+               owner: "acme",
+               slug: "shop",
+               clone_url: "git@github.com:acme/shop.git"
+             } = repo
+           ] = Config.list_repos()
 
     view |> element("#new-project") |> render_click()
 

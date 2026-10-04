@@ -324,6 +324,34 @@ defmodule Conductor.GitHub do
 
   defp repo_variables(repo, number), do: %{owner: repo.owner, name: repo.slug, number: number}
 
+  ## Repositories
+
+  @doc """
+  The repositories the token's account can reach that are not archived, by full name, as the attributes of a
+  `Conductor.Config.Repository` (cloned over SSH) with their `full_name`.
+  """
+  def repositories, do: repositories(1, [])
+
+  defp repositories(page, acc) do
+    params = [per_page: 100, page: page, sort: "full_name"]
+
+    with {:ok, repos} <- request(url: "/user/repos", params: params) do
+      acc =
+        acc ++
+          for repo <- repos, not repo["archived"] do
+            %{
+              "full_name" => repo["full_name"],
+              "name" => repo["name"],
+              "owner" => repo["owner"]["login"],
+              "slug" => repo["name"],
+              "clone_url" => repo["ssh_url"]
+            }
+          end
+
+      if length(repos) == 100, do: repositories(page + 1, acc), else: {:ok, acc}
+    end
+  end
+
   ## Branches and pull requests
 
   def branch_exists?(repo, branch) do

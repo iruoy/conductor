@@ -307,6 +307,41 @@ defmodule Conductor.GitHubTest do
     assert {:error, "GitHub project acme/4 was not found"} = GitHub.pickup(@project)
   end
 
+  test "repositories lists the account's repositories that are not archived, across pages" do
+    repo = fn name, archived ->
+      %{
+        "full_name" => "acme/#{name}",
+        "name" => name,
+        "owner" => %{"login" => "acme"},
+        "ssh_url" => "git@github.com:acme/#{name}.git",
+        "archived" => archived
+      }
+    end
+
+    Req.Test.stub(Conductor.GitHub, fn conn ->
+      assert conn.request_path == "/user/repos"
+
+      case conn.query_params do
+        %{"page" => "1", "per_page" => "100"} ->
+          Req.Test.json(conn, for(n <- 1..100, do: repo.("r#{n}", n == 2)))
+
+        %{"page" => "2"} ->
+          Req.Test.json(conn, [repo.("shop", false)])
+      end
+    end)
+
+    assert {:ok, repos} = GitHub.repositories()
+    assert length(repos) == 100
+
+    assert List.last(repos) == %{
+             "full_name" => "acme/shop",
+             "name" => "shop",
+             "owner" => "acme",
+             "slug" => "shop",
+             "clone_url" => "git@github.com:acme/shop.git"
+           }
+  end
+
   test "branch_exists?" do
     Req.Test.stub(Conductor.GitHub, fn conn ->
       case conn.request_path do
