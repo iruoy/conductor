@@ -5,15 +5,20 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import lockfile from "proper-lockfile";
 import { FileCredentialStore } from "./credentials.ts";
 import { type Command, Runner } from "./runner.ts";
 
 for (const level of ["log", "info", "debug", "warn"] as const) console[level] = console.error;
 
+const CLOSE_TIMEOUT_MS = 5_000;
+
 const write = (value: unknown): void => void process.stdout.write(`${JSON.stringify(value)}\n`);
 
 const dataDir = process.env.CONDUCTOR_RUNNER_DATA ?? join(process.cwd(), "data");
 mkdirSync(dataDir, { recursive: true });
+// Two runners writing one store corrupt it, so this one waits until the previous one is gone.
+await lockfile.lock(dataDir, { retries: { retries: 40, minTimeout: 500, maxTimeout: 500 } });
 
 const runner = await Runner.open({
 	storage: await openNodeSqliteStorage(join(dataDir, "durable.sqlite")),
@@ -34,5 +39,7 @@ input.on("line", (line) => {
 	void runner.dispatch(command);
 });
 input.on("close", () => {
+	// Closing waits for running tools, which may never finish; Phoenix is gone either way.
+	setTimeout(() => process.exit(0), CLOSE_TIMEOUT_MS).unref();
 	void runner.close().finally(() => process.exit(0));
 });
