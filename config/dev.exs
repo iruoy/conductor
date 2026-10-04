@@ -2,8 +2,11 @@ import Config
 
 # Configure your database
 config :conductor, Conductor.Repo,
-  database: Path.expand("../conductor_dev.db", __DIR__),
-  pool_size: 5,
+  username: System.get_env("PGUSER") || "postgres",
+  password: System.get_env("PGPASSWORD") || "postgres",
+  hostname: System.get_env("PGHOST") || "localhost",
+  database: "conductor_dev",
+  pool_size: 10,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 
