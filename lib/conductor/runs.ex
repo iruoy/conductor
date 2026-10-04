@@ -102,9 +102,11 @@ defmodule Conductor.Runs do
 
   ## Transcript
 
+  # First-persisted order includes tool starts and notes, which have no runner position.
+  # Upserts preserve the row id, so replaying a snapshot does not move existing events.
   def list_events(run_id, conversation \\ nil) do
     query =
-      from e in Event, where: e.run_id == ^run_id, order_by: [e.conversation, e.position, e.id]
+      from e in Event, where: e.run_id == ^run_id, order_by: e.id
 
     query = if conversation, do: where(query, [e], e.conversation == ^conversation), else: query
     Repo.all(query)
