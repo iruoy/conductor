@@ -14,9 +14,6 @@ defmodule Conductor.Config do
   def list_repos, do: Repository |> Ash.Query.sort(:name) |> Ash.read!()
   def get_repo!(id), do: Ash.get!(Repository, id)
 
-  def change_repo(%Repository{} = repo, attrs \\ %{}),
-    do: repo |> changeset(attrs) |> FormAdapter.changeset()
-
   def create_repo(attrs), do: %Repository{} |> changeset(attrs) |> persist()
   def update_repo(%Repository{} = repo, attrs), do: repo |> changeset(attrs) |> persist()
   def delete_repo(%Repository{} = repo), do: destroy_record(repo)
@@ -32,9 +29,6 @@ defmodule Conductor.Config do
 
   def list_enabled_projects, do: Project |> Ash.Query.for_read(:enabled) |> Ash.read!()
   def get_project!(id), do: Ash.get!(Project, id, load: [:repo])
-
-  def change_project(%Project{} = project, attrs \\ %{}),
-    do: project |> changeset(attrs) |> FormAdapter.changeset()
 
   def create_project(attrs), do: %Project{} |> changeset(attrs) |> persist()
   def update_project(%Project{} = project, attrs), do: project |> changeset(attrs) |> persist()
@@ -59,9 +53,6 @@ defmodule Conductor.Config do
 
     settings
   end
-
-  def change_settings(%Settings{} = settings, attrs \\ %{}),
-    do: settings |> changeset(attrs) |> FormAdapter.changeset()
 
   def update_settings(%Settings{} = settings, attrs),
     do: settings |> changeset(attrs) |> persist()
