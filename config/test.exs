@@ -1,5 +1,7 @@
 import Config
 
+config :ash, disable_async?: true, policies: [show_policy_breakdowns?: true]
+
 # Postgrex requires socket_dir rather than hostname for Unix-socket connections.
 pg_host = System.get_env("PGHOST") || "localhost"
 
