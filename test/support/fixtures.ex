@@ -105,7 +105,8 @@ defmodule Conductor.Fixtures do
 
   @doc """
   GitHub stubs for repository `acme/shop` in project `acme/1`: the project holds `issues` (maps with `number` and
-  `title`, optionally `priority`), every issue is in `status`, the account's only repository is `acme/shop`, every
+  `title`, optionally `priority`), every issue is in `status`, the account's only repository is `acme/shop` and its
+  only project `acme/1`, every
   branch exists unless `branch_exists: false`, and every PR is created anew. Status changes are sent to the test as `{:github_status, item, option}`.
   """
   def stub_github(opts \\ []) do
@@ -138,6 +139,25 @@ defmodule Conductor.Fixtures do
 
               query =~ "query Issue" or query =~ "query Item" ->
                 %{"repository" => %{"issue" => issue.()}}
+
+              query =~ "query Projects" ->
+                project =
+                  Map.merge(github_project(), %{
+                    "number" => 1,
+                    "title" => "Shop",
+                    "closed" => false,
+                    "owner" => %{"login" => "acme"}
+                  })
+
+                %{
+                  "viewer" => %{
+                    "login" => "conductor-bot",
+                    "projectsV2" => %{"nodes" => []},
+                    "organizations" => %{
+                      "nodes" => [%{"projectsV2" => %{"nodes" => [project]}}]
+                    }
+                  }
+                }
 
               query =~ "mutation SetStatus" ->
                 send(test, {:github_status, variables["item"], variables["option"]})

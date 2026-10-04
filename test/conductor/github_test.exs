@@ -342,6 +342,47 @@ defmodule Conductor.GitHubTest do
            }
   end
 
+  test "projects lists the open projects of the account and its organizations with their statuses" do
+    project = fn id, owner, number, closed ->
+      %{
+        "id" => id,
+        "number" => number,
+        "title" => "Project #{number}",
+        "closed" => closed,
+        "owner" => %{"login" => owner},
+        "status" => %{"options" => [%{"name" => "Todo"}, %{"name" => "Done"}]}
+      }
+    end
+
+    stub_graphql(fn query, _variables ->
+      assert query =~ "query Projects"
+
+      %{
+        "viewer" => %{
+          "login" => "conductor-bot",
+          "projectsV2" => %{"nodes" => [project.("p1", "conductor-bot", 2, false)]},
+          "organizations" => %{
+            "nodes" => [
+              %{"projectsV2" => %{"nodes" => [project.("p2", "acme", 4, false), nil]}},
+              %{"projectsV2" => %{"nodes" => [project.("p3", "acme", 5, true)]}}
+            ]
+          }
+        }
+      }
+    end)
+
+    assert {:ok, %{login: "conductor-bot", projects: [acme, own]}} = GitHub.projects()
+
+    assert acme == %{
+             "project_owner" => "acme",
+             "project_number" => 4,
+             "title" => "Project 4",
+             "statuses" => ["Todo", "Done"]
+           }
+
+    assert %{"project_owner" => "conductor-bot", "project_number" => 2} = own
+  end
+
   test "branch_exists?" do
     Req.Test.stub(Conductor.GitHub, fn conn ->
       case conn.request_path do

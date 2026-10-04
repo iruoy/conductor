@@ -93,6 +93,24 @@ defmodule Conductor.GitHub do
   #{@item_fields}
   """
 
+  @projects_query """
+  query Projects {
+    viewer {
+      login
+      projectsV2(first: 100) { nodes { ...projectFields } }
+      organizations(first: 100) { nodes { projectsV2(first: 100) { nodes { ...projectFields } } } }
+    }
+  }
+  fragment projectFields on ProjectV2 {
+    id
+    number
+    title
+    closed
+    owner { ... on Organization { login } ... on User { login } }
+    status: field(name: "Status") { ... on ProjectV2SingleSelectField { options { name } } }
+  }
+  """
+
   @set_status_mutation """
   mutation SetStatus($project: ID!, $item: ID!, $field: ID!, $option: String!) {
     updateProjectV2ItemFieldValue(
@@ -349,6 +367,47 @@ defmodule Conductor.GitHub do
           end
 
       if length(repos) == 100, do: repositories(page + 1, acc), else: {:ok, acc}
+    end
+  end
+
+  ## Projects
+
+  @doc """
+  The login of the token's account and the open GitHub Projects it and its organizations own, by owner and number,
+  as the attributes of a `Conductor.Config.Project` with their `title` and the `statuses` of the Status field.
+  Organizations that do not let the token in are left out.
+  """
+  def projects do
+    case request(method: :post, url: "/graphql", json: %{query: @projects_query, variables: %{}}) do
+      {:ok, %{"data" => %{"viewer" => %{} = viewer}}} ->
+        organizations = Enum.flat_map(nodes(viewer["organizations"]), &nodes(&1["projectsV2"]))
+
+        projects =
+          for project <- Enum.uniq_by(nodes(viewer["projectsV2"]) ++ organizations, & &1["id"]),
+              not project["closed"] do
+            %{
+              "project_owner" => project["owner"]["login"],
+              "project_number" => project["number"],
+              "title" => project["title"],
+              "statuses" =>
+                for(option <- get_in(project, ["status", "options"]) || [], do: option["name"])
+            }
+          end
+
+        {:ok,
+         %{
+           login: viewer["login"],
+           projects: Enum.sort_by(projects, &{&1["project_owner"], &1["project_number"]})
+         }}
+
+      {:ok, %{"errors" => [_ | _] = errors}} ->
+        {:error, "GitHub: #{Enum.map_join(errors, "; ", & &1["message"])}"}
+
+      {:ok, body} ->
+        {:error, "GitHub: unexpected GraphQL response #{inspect(body)}"}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

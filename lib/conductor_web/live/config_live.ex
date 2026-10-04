@@ -13,7 +13,8 @@ defmodule ConductorWeb.ConfigLive do
      socket
      |> assign(page_title: "Config", reasoning: @reasoning, models: [], models_error: nil)
      |> assign_settings(settings)
-     |> assign(repo_form: nil, project_form: nil, github_repos: nil, github_repos_error: nil)
+     |> assign(repo_form: nil, github_repos: nil, github_repos_error: nil)
+     |> assign(project_form: nil, github_projects: nil, github_projects_error: nil)
      |> load_lists()
      |> load_models()}
   end
@@ -87,6 +88,7 @@ defmodule ConductorWeb.ConfigLive do
         :if={@repo_form}
         for={@repo_form}
         id="repo-form"
+        phx-change="change_repo"
         phx-submit="save_repo"
         class="rounded-box border border-base-300 p-4"
       >
@@ -94,32 +96,25 @@ defmodule ConductorWeb.ConfigLive do
           Could not list the repositories from GitHub ({@github_repos_error}); enter one by hand.
         </p>
         <div class="grid gap-x-6 sm:grid-cols-2">
-          <%= if @github_repos do %>
+          <div :if={@github_repos} class="sm:col-span-2">
             <.input
               type="select"
               id="repo-github"
               name="repository[github]"
-              label="GitHub repository"
+              label="GitHub repository (fills in the fields below)"
               value={@repo_form.params["github"]}
               options={Enum.map(@github_repos, & &1["full_name"])}
               prompt="Choose a repository"
-              required
             />
-            <.input
-              field={@repo_form[:name]}
-              label="Name"
-              placeholder="the repository's name on GitHub"
-            />
-          <% else %>
-            <.input field={@repo_form[:name]} label="Name" placeholder="shop-api" />
-            <.input
-              field={@repo_form[:clone_url]}
-              label="Clone URL"
-              placeholder="git@github.com:acme/shop-api.git"
-            />
-            <.input field={@repo_form[:owner]} label="GitHub owner" placeholder="acme" />
-            <.input field={@repo_form[:slug]} label="Repository name" placeholder="shop-api" />
-          <% end %>
+          </div>
+          <.input field={@repo_form[:name]} label="Name" placeholder="shop-api" />
+          <.input
+            field={@repo_form[:clone_url]}
+            label="Clone URL"
+            placeholder="git@github.com:acme/shop-api.git"
+          />
+          <.input field={@repo_form[:owner]} label="GitHub owner" placeholder="acme" />
+          <.input field={@repo_form[:slug]} label="Repository name" placeholder="shop-api" />
           <.input
             field={@repo_form[:base_branch]}
             label="Base branch"
@@ -180,10 +175,27 @@ defmodule ConductorWeb.ConfigLive do
         :if={@project_form}
         for={@project_form}
         id="project-form"
+        phx-change="change_project"
         phx-submit="save_project"
         class="rounded-box border border-base-300 p-4"
       >
+        <p :if={@github_projects_error} class="mb-2 text-sm text-warning">
+          Could not list the projects from GitHub ({@github_projects_error}); enter one by hand.
+        </p>
         <div class="grid gap-x-6 sm:grid-cols-2">
+          <div :if={@github_projects} class="sm:col-span-2">
+            <.input
+              type="select"
+              id="project-github"
+              name="project[github]"
+              label="GitHub project (fills in the fields below)"
+              value={@project_pick}
+              options={
+                Enum.map(@github_projects, &{"#{project_key(&1)} · #{&1["title"]}", project_key(&1)})
+              }
+              prompt="Choose a project"
+            />
+          </div>
           <.input
             field={@project_form[:repo_id]}
             type="select"
@@ -206,25 +218,29 @@ defmodule ConductorWeb.ConfigLive do
             label="GitHub project number"
             placeholder="4"
           />
-          <.input
+          <.status_input
             field={@project_form[:pickup_status]}
             label="Pick up from status"
             placeholder="Ready"
+            statuses={@project_statuses}
           />
-          <.input
+          <.status_input
             field={@project_form[:active_status]}
             label="Status while working"
             placeholder="In progress"
+            statuses={@project_statuses}
           />
-          <.input
+          <.status_input
             field={@project_form[:handoff_status]}
             label="Status after the PR"
             placeholder="In review"
+            statuses={@project_statuses}
           />
-          <.input
+          <.status_input
             field={@project_form[:done_status]}
             label="Status of finished subtasks"
             placeholder="Done"
+            statuses={@project_statuses}
           />
         </div>
         <.input
@@ -274,6 +290,30 @@ defmodule ConductorWeb.ConfigLive do
     """
   end
 
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, required: true
+  attr :placeholder, :string, required: true
+  attr :statuses, :list, default: nil
+
+  # A status of the chosen GitHub project, or free text when its statuses are not known.
+  defp status_input(%{statuses: nil} = assigns) do
+    ~H"""
+    <.input field={@field} label={@label} placeholder={@placeholder} />
+    """
+  end
+
+  defp status_input(assigns) do
+    ~H"""
+    <.input
+      field={@field}
+      type="select"
+      label={@label}
+      options={Enum.uniq(@statuses ++ List.wrap(@field.value)) -- [""]}
+      prompt="Choose a status"
+    />
+    """
+  end
+
   ## Settings
 
   @impl true
@@ -313,9 +353,17 @@ defmodule ConductorWeb.ConfigLive do
 
   def handle_event("cancel_repo", _params, socket), do: {:noreply, assign(socket, repo_form: nil)}
 
-  def handle_event("save_repo", %{"repository" => params}, socket) do
-    params = github_repo_params(socket.assigns.github_repos, params)
+  def handle_event("change_repo", %{"repository" => params} = event, socket) do
+    params =
+      if event["_target"] == ["repository", "github"],
+        do: Map.merge(params, chosen_repo(socket.assigns.github_repos, params["github"])),
+        else: params
 
+    {:noreply,
+     assign(socket, repo_form: to_form(Config.change_repo(socket.assigns.repo, params)))}
+  end
+
+  def handle_event("save_repo", %{"repository" => params}, socket) do
     result =
       case socket.assigns.repo do
         %Repository{id: nil} -> Config.create_repo(params)
@@ -345,10 +393,24 @@ defmodule ConductorWeb.ConfigLive do
   ## Projects
 
   def handle_event("edit_project", %{"id" => id}, socket) do
-    project = if id == "new", do: %Project{}, else: Config.get_project!(id)
+    socket = load_github_projects(socket)
+
+    project =
+      if id == "new",
+        do: %Project{runner_login: socket.assigns.github_login},
+        else: Config.get_project!(id)
 
     {:noreply,
-     assign(socket, project: project, project_form: to_form(Config.change_project(project)))}
+     socket |> assign(project: project) |> assign_project_form(Config.change_project(project))}
+  end
+
+  def handle_event("change_project", %{"project" => params} = event, socket) do
+    params =
+      if event["_target"] == ["project", "github"],
+        do: Map.merge(params, chosen_project(socket.assigns.github_projects, params["github"])),
+        else: params
+
+    {:noreply, assign_project_form(socket, Config.change_project(socket.assigns.project, params))}
   end
 
   def handle_event("cancel_project", _params, socket),
@@ -370,7 +432,7 @@ defmodule ConductorWeb.ConfigLive do
          |> put_flash(:info, "Saved #{project.project_owner}/#{project.project_number}")}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, project_form: to_form(changeset))}
+        {:noreply, assign_project_form(socket, changeset)}
     end
   end
 
@@ -403,16 +465,63 @@ defmodule ConductorWeb.ConfigLive do
 
   defp load_github_repos(socket), do: assign(socket, github_repos: nil, github_repos_error: nil)
 
-  # The chosen repository decides where it lives on GitHub; its name there is the default name.
-  defp github_repo_params(nil, params), do: params
+  defp chosen_repo(github_repos, full_name) do
+    github_repos
+    |> Enum.find(%{}, &(&1["full_name"] == full_name))
+    |> Map.take(["name", "owner", "slug", "clone_url"])
+  end
 
-  defp github_repo_params(github_repos, params) do
-    chosen = Enum.find(github_repos, %{}, &(&1["full_name"] == params["github"]))
-    name = if params["name"] in [nil, ""], do: chosen["name"], else: params["name"]
+  defp load_github_projects(socket) do
+    case GitHub.projects() do
+      {:ok, %{login: login, projects: projects}} ->
+        assign(socket, github_projects: projects, github_login: login, github_projects_error: nil)
 
-    params
-    |> Map.merge(Map.take(chosen, ["owner", "slug", "clone_url"]))
-    |> Map.put("name", name)
+      {:error, reason} ->
+        assign(socket, github_projects: nil, github_login: nil, github_projects_error: reason)
+    end
+  end
+
+  # The form with the GitHub project it points at: the one selected in the list, and its statuses to choose from.
+  defp assign_project_form(socket, changeset) do
+    owner = Ecto.Changeset.get_field(changeset, :project_owner)
+    number = Ecto.Changeset.get_field(changeset, :project_number)
+
+    github_project =
+      Enum.find(socket.assigns.github_projects || [], fn project ->
+        project["project_number"] == number and is_binary(owner) and
+          String.downcase(project["project_owner"]) == String.downcase(owner)
+      end)
+
+    assign(socket,
+      project_form: to_form(changeset),
+      project_pick: github_project && project_key(github_project),
+      project_statuses: github_project && github_project["statuses"]
+    )
+  end
+
+  defp project_key(github_project),
+    do: "#{github_project["project_owner"]}/#{github_project["project_number"]}"
+
+  # The chosen project with a guess at its statuses, as in GitHub's templates.
+  defp chosen_project(github_projects, key) do
+    case Enum.find(github_projects, &(project_key(&1) == key)) do
+      nil ->
+        %{}
+
+      %{"statuses" => statuses} = github_project ->
+        guesses = [
+          {"pickup_status", [~r/ready/i, ~r/to.?do/i]},
+          {"active_status", [~r/progress/i]},
+          {"handoff_status", [~r/review/i]},
+          {"done_status", [~r/done/i]}
+        ]
+
+        for {field, patterns} <- guesses,
+            into: Map.take(github_project, ["project_owner", "project_number"]) do
+          {field,
+           Enum.find_value(patterns, "", fn pattern -> Enum.find(statuses, &(&1 =~ pattern)) end)}
+        end
+    end
   end
 
   defp load_models(socket) do
