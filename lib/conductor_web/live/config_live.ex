@@ -163,7 +163,6 @@ defmodule ConductorWeb.ConfigLive do
         class="rounded-box border border-base-300 p-4"
       >
         <div class="grid gap-x-6 sm:grid-cols-2">
-          <.input field={@project_form[:key]} label="Issue key prefix" placeholder="SHOP" />
           <.input
             field={@project_form[:repo_id]}
             type="select"
@@ -176,25 +175,41 @@ defmodule ConductorWeb.ConfigLive do
             placeholder="conductor-bot"
           />
           <.input
-            field={@project_form[:pickup_label]}
-            label="Pick up issues labelled"
-            placeholder="Ready for AI"
+            field={@project_form[:project_owner]}
+            label="GitHub project owner (organization or user)"
+            placeholder="acme"
           />
           <.input
-            field={@project_form[:active_label]}
-            label="Label while working"
-            placeholder="In Progress"
+            field={@project_form[:project_number]}
+            type="number"
+            label="GitHub project number"
+            placeholder="4"
           />
           <.input
-            field={@project_form[:handoff_label]}
-            label="Label after the PR"
-            placeholder="Review"
+            field={@project_form[:pickup_status]}
+            label="Pick up from status"
+            placeholder="Ready"
+          />
+          <.input
+            field={@project_form[:active_status]}
+            label="Status while working"
+            placeholder="In progress"
+          />
+          <.input
+            field={@project_form[:handoff_status]}
+            label="Status after the PR"
+            placeholder="In review"
+          />
+          <.input
+            field={@project_form[:done_status]}
+            label="Status of finished subtasks"
+            placeholder="Done"
           />
         </div>
         <.input
-          field={@project_form[:search_extra]}
-          label="Extra search qualifiers"
-          placeholder={~s(label:ai milestone:"v2")}
+          field={@project_form[:item_filter]}
+          label="Project filter (optional, as in a project view)"
+          placeholder="assignee:conductor-bot is:open"
         />
         <.input field={@project_form[:enabled]} type="checkbox" label="Enabled" />
         <div class="flex gap-2">
@@ -204,10 +219,12 @@ defmodule ConductorWeb.ConfigLive do
       </.form>
 
       <.table id="projects" rows={@projects}>
-        <:col :let={project} label="Key"><span class="font-mono">{project.key}</span></:col>
+        <:col :let={project} label="GitHub project">
+          <span class="font-mono">{project.project_owner}/{project.project_number}</span>
+        </:col>
         <:col :let={project} label="Repository">{project.repo.name}</:col>
         <:col :let={project} label="Flow">
-          {project.pickup_label} → {project.active_label} → {project.handoff_label}
+          {project.pickup_status} → {project.active_status} → {project.handoff_status}
         </:col>
         <:col :let={project} label="Enabled">
           <.icon :if={project.enabled} name="hero-check" class="size-4 text-success" />
@@ -225,7 +242,7 @@ defmodule ConductorWeb.ConfigLive do
             id={"delete-project-#{project.id}"}
             phx-click="delete_project"
             phx-value-id={project.id}
-            data-confirm={"Delete #{project.key}?"}
+            data-confirm={"Delete #{project.project_owner}/#{project.project_number}?"}
             class="link text-error"
           >
             Delete
@@ -323,7 +340,7 @@ defmodule ConductorWeb.ConfigLive do
          socket
          |> assign(project_form: nil)
          |> load_lists()
-         |> put_flash(:info, "Saved #{project.key}")}
+         |> put_flash(:info, "Saved #{project.project_owner}/#{project.project_number}")}
 
       {:error, changeset} ->
         {:noreply, assign(socket, project_form: to_form(changeset))}

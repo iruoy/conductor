@@ -42,10 +42,13 @@ defmodule Conductor.Runs do
   def active_count, do: Repo.aggregate(from(r in Run, where: r.status in @active), :count)
 
   def next_queued do
-    Repo.one(
-      from r in Run, where: r.status == "picked_up", order_by: [r.inserted_at, r.id], limit: 1
-    )
+    from(r in Run, where: r.status == "picked_up", order_by: [r.inserted_at, r.id])
+    |> Repo.all()
+    |> Enum.min_by(&priority_rank/1, fn -> nil end)
   end
+
+  # The highest priority first, the oldest among equals; issues without a priority come last.
+  defp priority_rank(run), do: (run.issue_snapshot || %{})["priority_rank"] || :infinity
 
   def open_issue_keys(keys) do
     terminal = Run.terminal_statuses()

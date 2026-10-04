@@ -20,7 +20,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { agentChoice, answerText, createConductorExtension, type GithubConfig, githubFromEnv, SubagentPrompt } from "./agent.ts";
-import { type ModelMap, type RunRecord, RunsDoc, type Settled } from "./state.ts";
+import { type GithubRun, type ModelMap, type RunRecord, RunsDoc, type Settled } from "./state.ts";
 
 export const VERSION = "0.1.0";
 
@@ -148,6 +148,7 @@ export class Runner {
 		if (!isAbsolute(cwd)) throw new ProtocolError(`start_run: cwd must be absolute, got ${cwd}`);
 		const prompt = str(command, "prompt");
 		const models = command.models as ModelMap | undefined;
+		const github = command.github as GithubRun | undefined;
 		if (models?.head?.provider === undefined) throw new ProtocolError("models.head is required");
 
 		return this.serial(runId, async () => {
@@ -161,6 +162,7 @@ export class Runner {
 					conversationId: created.id as number,
 					cwd,
 					models,
+					...(github ? { github } : {}),
 					submissionId: null,
 					status: "running",
 					aborted: false,

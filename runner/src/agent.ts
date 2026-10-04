@@ -1,5 +1,5 @@
 // The `conductor` extension the head conversation of every run selects: subagents per subtask, questions to a human,
-// and closing GitHub issues. Subagents select `conductor-subagent` instead, which brings only a prompt.
+// and moving GitHub issues through the project's statuses. Subagents select `conductor-subagent` instead, which brings only a prompt.
 import type { Context } from "@earendil-works/chord";
 import { type AssistantMessage, Type } from "@earendil-works/pi-ai";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -15,7 +15,7 @@ import {
 	type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { type Complexity, findRunByConversation, type ModelChoice, RunsDoc } from "./state.ts";
+import { type Complexity, findRunByConversation, type GithubRun, type ModelChoice, RunsDoc } from "./state.ts";
 
 export type AgentHooks = {
 	question(runId: string, qid: string, text: string): void;
@@ -26,9 +26,9 @@ export type AgentHooks = {
 export type GithubConfig = { baseUrl: string; token: string };
 
 export function githubFromEnv(env: NodeJS.ProcessEnv = process.env): GithubConfig | undefined {
-	const { GITHUB_TOKEN, GITHUB_API_URL } = env;
+	const { GITHUB_TOKEN } = env;
 	if (!GITHUB_TOKEN) return undefined;
-	return { baseUrl: (GITHUB_API_URL || "https://api.github.com").replace(/\/$/, ""), token: GITHUB_TOKEN };
+	return { baseUrl: "https://api.github.com", token: GITHUB_TOKEN };
 }
 
 export function agentChoice(choice: ModelChoice): { model: { provider: string; modelId: string }; thinkingLevel?: ModelThinkingLevel } {
@@ -61,7 +61,7 @@ export const SubagentPrompt = defineExtension({
 });
 
 const SubtaskSchema = Type.Object({
-	key: Type.String({ description: "Key of the subtask, e.g. PROJ-124" }),
+	key: Type.String({ description: "Key of the subtask, e.g. #124" }),
 	title: Type.String(),
 	complexity: Type.Optional(
 		Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")], {
@@ -197,23 +197,28 @@ export function createConductorExtension(hooks: AgentHooks, github: GithubConfig
 		},
 	});
 
-	const closeIssueTool = defineTool({
-		name: "close_issue",
-		description: "Close a GitHub issue or sub-issue as completed. Does nothing when it is already closed.",
+	const setStatusTool = defineTool({
+		name: "set_issue_status",
+		description:
+			"Move the issue of this run or one of its subtasks to the project status with this name. Moving a subtask to " +
+			"the done status also closes its issue. Does nothing when it is already there.",
 		parameters: Type.Object({
-			repo: Type.String({ description: "owner/name of the repository" }),
 			number: Type.Integer({ description: "Issue number, without the #" }),
+			status: Type.String({ description: "e.g. In progress, Done" }),
 		}),
 		replay: "safe",
-		execute: async (args) => {
+		execute: async (args, api, context) => {
 			if (github === undefined) throw new Error("GitHub is not configured for the runner");
-			return { content: [{ type: "text", text: await closeIssue(github, args.repo, args.number) }] };
+			const runId = await runIdOf(api, context);
+			const run = (await api.snapshot(RunsDoc, context))?.runs[runId]?.github;
+			if (run === undefined) throw new Error("This run has no GitHub project");
+			return { content: [{ type: "text", text: await setIssueStatus(github, run, args.number, args.status) }] };
 		},
 	});
 
 	return defineExtension({
 		name: "conductor",
-		tools: [runSubagents, askHuman, closeIssueTool],
+		tools: [runSubagents, askHuman, setStatusTool],
 		sections: [
 			section("preamble", () => HEAD_PREAMBLE, { tag: false }),
 			section("cwd", (input) => input.env?.cwd),
@@ -221,18 +226,46 @@ export function createConductorExtension(hooks: AgentHooks, github: GithubConfig
 	});
 }
 
-async function closeIssue(github: GithubConfig, repo: string, number: number): Promise<string> {
-	if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error(`${repo} is not an owner/name repository`);
-	const response = await fetch(`${github.baseUrl}/repos/${repo}/issues/${number}`, {
-		method: "PATCH",
-		headers: {
-			Authorization: `Bearer ${github.token}`,
-			Accept: "application/vnd.github+json",
-			"Content-Type": "application/json",
-			"X-GitHub-Api-Version": "2022-11-28",
-		},
-		body: JSON.stringify({ state: "closed", state_reason: "completed" }),
-	});
-	if (!response.ok) throw new Error(`GitHub ${repo}#${number}: HTTP ${response.status}`);
-	return `${repo}#${number} is closed`;
+async function setIssueStatus(github: GithubConfig, run: GithubRun, number: number, status: string): Promise<string> {
+	const same = (name: string) => name.toLowerCase() === status.toLowerCase();
+	const name = Object.keys(run.statuses).find(same);
+	if (name === undefined) {
+		throw new Error(`The project has no status ${status}; options: ${Object.keys(run.statuses).join(", ")}`);
+	}
+	const headers = {
+		Authorization: `Bearer ${github.token}`,
+		Accept: "application/vnd.github+json",
+		"Content-Type": "application/json",
+		"X-GitHub-Api-Version": "2022-11-28",
+	};
+	const done: string[] = [];
+
+	const item = run.items[String(number)];
+	if (item === undefined) {
+		done.push(`#${number} is not in the project, so it has no status`);
+	} else {
+		const query = `mutation SetStatus($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+			updateProjectV2ItemFieldValue(
+				input: {projectId: $project, itemId: $item, fieldId: $field, value: {singleSelectOptionId: $option}}
+			) { projectV2Item { id } }
+		}`;
+		const variables = { project: run.project_id, item, field: run.status_field_id, option: run.statuses[name] };
+		const response = await fetch(`${github.baseUrl}/graphql`, { method: "POST", headers, body: JSON.stringify({ query, variables }) });
+		if (!response.ok) throw new Error(`GitHub #${number} status: HTTP ${response.status}`);
+		const { errors } = (await response.json()) as { errors?: { message: string }[] };
+		if (errors?.length) throw new Error(`GitHub #${number} status: ${errors.map((e) => e.message).join("; ")}`);
+		done.push(`#${number} moved to ${name}`);
+	}
+
+	// GitHub counts a sub-issue as done once it is closed, whatever its status says.
+	if (name.toLowerCase() === run.done_status.toLowerCase()) {
+		const response = await fetch(`${github.baseUrl}/repos/${run.repo}/issues/${number}`, {
+			method: "PATCH",
+			headers,
+			body: JSON.stringify({ state: "closed", state_reason: "completed" }),
+		});
+		if (!response.ok) throw new Error(`GitHub #${number} close: HTTP ${response.status}`);
+		done.push(`#${number} closed`);
+	}
+	return done.join("; ");
 }

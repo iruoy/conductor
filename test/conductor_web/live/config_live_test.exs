@@ -30,17 +30,19 @@ defmodule ConductorWeb.ConfigLiveTest do
     view
     |> form("#project-form",
       project: %{
-        key: "shop",
+        project_owner: "acme",
+        project_number: "4",
         repo_id: repo.id,
         runner_login: "conductor-bot",
-        pickup_label: "Ready",
-        active_label: "In Progress",
-        handoff_label: "Review"
+        pickup_status: "Ready",
+        active_status: "In Progress",
+        handoff_status: "Review"
       }
     )
     |> render_submit()
 
-    assert [%{key: "SHOP"}] = Config.list_projects()
+    assert [%{project_owner: "acme", project_number: 4, done_status: "Done"}] =
+             Config.list_projects()
 
     # Model choices come from the runner.
     assert render(view) =~ "Faux 1"

@@ -26,11 +26,12 @@ defmodule Conductor.Fixtures do
       attrs
       |> Map.delete(:repo)
       |> Enum.into(%{
-        key: "SHOP",
+        project_owner: "acme",
+        project_number: 1,
         runner_login: "conductor-bot",
-        pickup_label: "Ready for AI",
-        active_label: "In Progress",
-        handoff_label: "Review",
+        pickup_status: "Ready for AI",
+        active_status: "In Progress",
+        handoff_status: "Review",
         repo_id: repo.id
       })
       |> Config.create_project()
@@ -49,14 +50,19 @@ defmodule Conductor.Fixtures do
     settings
   end
 
+  @doc "The issue snapshot of the run key `key` (`shop-4` is issue `#4`)."
   def snapshot(key, summary \\ "Fix the thing", extra \\ %{}) do
+    number = Conductor.GitHub.number(key)
+
     Map.merge(
       %{
-        "key" => key,
+        "key" => "##{number}",
+        "number" => number,
         "summary" => summary,
-        "type" => "Story",
+        "type" => "Feature",
         "description" => "",
         "labels" => [],
+        "item_id" => "item-#{number}",
         "subtasks" => []
       },
       extra
@@ -98,8 +104,9 @@ defmodule Conductor.Fixtures do
   end
 
   @doc """
-  GitHub stubs for `acme/shop`: every issue carries the `status` label, the search returns `issues` (maps with
-  `number` and `title`), every branch exists unless `branch_exists: false`, and every PR is created anew.
+  GitHub stubs for repository `acme/shop` in project `acme/1`: the project holds `issues` (maps with `number` and
+  `title`, optionally `priority`), every issue is in `status`, every branch exists unless `branch_exists: false`, and
+  every PR is created anew. Status changes are sent to the test as `{:github_status, item, option}`.
   """
   def stub_github(opts \\ []) do
     test = self()
@@ -109,25 +116,35 @@ defmodule Conductor.Fixtures do
 
     Req.Test.stub(Conductor.GitHub, fn conn ->
       case {conn.method, String.split(conn.request_path, "/", trim: true)} do
-        {"GET", ["search", "issues"]} ->
-          Req.Test.json(conn, %{"items" => Enum.map(issues, &github_issue(&1, status))})
-
-        {"GET", ["repos", "acme", "shop", "issues", number]} ->
-          number = String.to_integer(number)
-          default = %{"number" => number, "title" => "Issue #{number}"}
-          issue = Enum.find(issues, default, &(&1["number"] == number))
-          Req.Test.json(conn, github_issue(issue, status))
-
-        {"GET", ["repos", "acme", "shop", "issues", _number, "sub_issues"]} ->
-          Req.Test.json(conn, [])
-
-        {"POST", ["repos", "acme", "shop", "issues", number, "labels"]} ->
+        {"POST", ["graphql"]} ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
-          send(test, {:github_label, String.to_integer(number), JSON.decode!(body)["labels"]})
-          Req.Test.json(conn, [])
+          %{"query" => query, "variables" => variables} = JSON.decode!(body)
+          issue = fn -> github_issue(find_issue(issues, variables["number"]), status) end
 
-        {"DELETE", ["repos", "acme", "shop", "issues", _number, "labels", _label]} ->
-          Req.Test.json(conn, [])
+          data =
+            cond do
+              query =~ "query Meta" ->
+                %{"repositoryOwner" => %{"projectV2" => github_project()}}
+
+              query =~ "query Items" ->
+                nodes =
+                  for issue <- issues do
+                    issue = github_issue(issue, status)
+                    issue["projectItems"]["nodes"] |> hd() |> Map.put("content", issue)
+                  end
+
+                page = %{"pageInfo" => %{"hasNextPage" => false}, "nodes" => nodes}
+                %{"repositoryOwner" => %{"projectV2" => %{"items" => page}}}
+
+              query =~ "query Issue" or query =~ "query Item" ->
+                %{"repository" => %{"issue" => issue.()}}
+
+              query =~ "mutation SetStatus" ->
+                send(test, {:github_status, variables["item"], variables["option"]})
+                %{"updateProjectV2ItemFieldValue" => %{"projectV2Item" => %{"id" => "x"}}}
+            end
+
+          Req.Test.json(conn, %{"data" => data})
 
         {"GET", ["repos", "acme", "shop", "branches" | _branch]} ->
           if branch_exists,
@@ -145,13 +162,44 @@ defmodule Conductor.Fixtures do
     end)
   end
 
+  @doc "The project of `stub_github/1`: its Status and Priority fields."
+  def github_project do
+    statuses =
+      for name <- ["Ready for AI", "In Progress", "Review", "Done"],
+          do: %{"id" => "option:#{name}", "name" => name}
+
+    %{
+      "id" => "project-1",
+      "status" => %{"id" => "status-field", "options" => statuses},
+      "priority" => %{"options" => [%{"name" => "P0"}, %{"name" => "P1"}, %{"name" => "P2"}]}
+    }
+  end
+
+  defp find_issue(issues, number) do
+    default = %{"number" => number, "title" => "Issue #{number}"}
+    Enum.find(issues, default, &(&1["number"] == number))
+  end
+
   defp github_issue(issue, status) do
+    item = %{
+      "id" => "item-#{issue["number"]}",
+      "project" => %{"id" => "project-1"},
+      "status" => %{"name" => status},
+      "size" => nil,
+      "priority" => issue["priority"] && %{"name" => issue["priority"]}
+    }
+
     %{
       "number" => issue["number"],
       "title" => issue["title"],
-      "state" => "open",
       "body" => nil,
-      "labels" => [%{"name" => status}]
+      "state" => "OPEN",
+      "repository" => %{"nameWithOwner" => "acme/shop"},
+      "labels" => %{"nodes" => []},
+      "assignees" => %{"nodes" => [%{"login" => "conductor-bot"}]},
+      "blockedBy" => %{"nodes" => []},
+      "subIssues" => %{"nodes" => []},
+      "projectItems" => %{"nodes" => [item]}
     }
   end
 
