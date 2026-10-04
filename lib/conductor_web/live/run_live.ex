@@ -73,14 +73,14 @@ defmodule ConductorWeb.RunLive do
 
       <div :if={@conversations != []} role="tablist" class="tabs tabs-border" id="conversations">
         <button
-          :for={{conversation, role} <- @conversations}
+          :for={{conversation, label} <- tab_labels(@conversations)}
           role="tab"
           id={"tab-#{conversation}"}
           phx-click="select"
           phx-value-conversation={conversation}
           class={["tab font-mono text-xs", @selected == conversation && "tab-active"]}
         >
-          {role}
+          {label}
         </button>
       </div>
 
@@ -97,16 +97,11 @@ defmodule ConductorWeb.RunLive do
       </div>
 
       <div :if={@live_text != "" or @live_tools != %{}} id="live" class="space-y-2">
-        <div
-          :if={@live_text != ""}
-          class="whitespace-pre-wrap px-1 text-sm leading-relaxed text-base-content/80"
-        >
-          {@live_text}<span class="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle"></span>
-        </div>
+        <.chat_message :if={@live_text != ""} from="agent" text={@live_text} streaming />
         <div
           :for={{call_id, tool} <- @live_tools}
           id={"live-tool-#{call_id}"}
-          class="rounded-box border border-info/40 px-3 py-2 text-xs"
+          class="ml-10 rounded-box border border-info/40 px-3 py-2 text-xs"
         >
           <div class="flex items-center gap-2 font-mono">
             <span class="loading loading-spinner loading-xs text-info"></span>
@@ -275,6 +270,21 @@ defmodule ConductorWeb.RunLive do
     socket
     |> assign(selected: conversation, live_text: "", live_tools: %{})
     |> stream(:items, Enum.map(items, &item/1), reset: true)
+  end
+
+  # A subtask's tab is its issue number (`sub:#12` is `#12`); one that ran more than once also counts its attempts.
+  defp tab_labels(conversations) do
+    attempts = Enum.frequencies_by(conversations, &elem(&1, 1))
+
+    {labels, _seen} =
+      Enum.map_reduce(conversations, %{}, fn {conversation, role}, seen ->
+        attempt = Map.get(seen, role, 0) + 1
+        label = String.replace_prefix(role, "sub:", "")
+        label = if attempts[role] > 1, do: "#{label} · attempt #{attempt}", else: label
+        {{conversation, label}, Map.put(seen, role, attempt)}
+      end)
+
+    labels
   end
 
   defp default_conversation(conversations) do

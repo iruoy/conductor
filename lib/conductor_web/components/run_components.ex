@@ -33,14 +33,56 @@ defmodule ConductorWeb.RunComponents do
     %{id: item_dom_id(conversation, "e:#{id}"), kind: kind, payload: entry}
   end
 
+  attr :from, :string, required: true, values: ~w(agent input)
+  attr :text, :string, required: true
+  attr :streaming, :boolean, default: false
+
+  @doc """
+  A message of the conversation: what the agent was told (`input`) or what it says (`agent`), also while that is
+  still streaming in. Everything else in a transcript is indented to line up with the message text.
+  """
+  def chat_message(assigns) do
+    ~H"""
+    <div class={["flex items-start gap-3", @from == "input" && "flex-row-reverse"]}>
+      <div class={[
+        "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full",
+        if(@from == "agent",
+          do: "bg-primary/15 text-primary",
+          else: "bg-base-300 text-base-content/70"
+        )
+      ]}>
+        <.icon
+          name={if @from == "agent", do: "hero-sparkles-micro", else: "hero-user-micro"}
+          class="size-4"
+        />
+      </div>
+      <div class={[
+        "min-w-0 flex-1 rounded-box px-4 py-3",
+        if(@from == "agent",
+          do: "rounded-tl-none bg-primary/10",
+          else: "rounded-tr-none bg-base-200"
+        )
+      ]}>
+        <div class={[
+          "mb-1 text-xs font-semibold uppercase tracking-wide",
+          if(@from == "agent", do: "text-primary/80", else: "text-base-content/60")
+        ]}>
+          {@from}
+        </div>
+        <div class="whitespace-pre-wrap break-words text-sm leading-relaxed" phx-no-format>{String.trim(@text)}<span
+          :if={@streaming}
+          class="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle"
+        ></span></div>
+      </div>
+    </div>
+    """
+  end
+
   attr :item, :map, required: true
 
   def transcript_item(%{item: %{kind: "pi.user"}} = assigns) do
     ~H"""
-    <div class="rounded-box bg-base-200 p-4">
-      <div class="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content/60">Input</div>
-      <div class="whitespace-pre-wrap text-sm">{message_text(@item.payload)}</div>
-    </div>
+    <.chat_message from="input" text={message_text(@item.payload)} />
     """
   end
 
@@ -48,18 +90,25 @@ defmodule ConductorWeb.RunComponents do
     assigns = assign(assigns, :blocks, message(assigns.item.payload)["content"] || [])
 
     ~H"""
-    <div class="space-y-2 px-1">
+    <div class="space-y-2">
       <%= for block <- @blocks do %>
         <%= case block["type"] do %>
           <% "text" -> %>
-            <div class="whitespace-pre-wrap text-sm leading-relaxed">{block["text"]}</div>
+            <.chat_message
+              :if={String.trim(block["text"] || "") != ""}
+              from="agent"
+              text={block["text"]}
+            />
           <% "thinking" -> %>
-            <details :if={block["thinking"] not in [nil, ""]} class="text-xs text-base-content/60">
+            <details
+              :if={block["thinking"] not in [nil, ""]}
+              class="ml-10 text-xs text-base-content/60"
+            >
               <summary class="cursor-pointer">thinking</summary>
               <div class="mt-1 whitespace-pre-wrap">{block["thinking"]}</div>
             </details>
           <% "toolCall" -> %>
-            <div class="flex items-start gap-2 font-mono text-xs text-base-content/80">
+            <div class="ml-10 flex items-start gap-2 font-mono text-xs text-base-content/80">
               <.icon
                 name="hero-wrench-screwdriver-micro"
                 class="mt-0.5 size-3.5 shrink-0 text-primary"
@@ -70,7 +119,7 @@ defmodule ConductorWeb.RunComponents do
           <% _ -> %>
         <% end %>
       <% end %>
-      <div :if={message(@item.payload)["errorMessage"]} class="text-sm text-error">
+      <div :if={message(@item.payload)["errorMessage"]} class="ml-10 text-sm text-error">
         {message(@item.payload)["errorMessage"]}
       </div>
     </div>
@@ -80,7 +129,7 @@ defmodule ConductorWeb.RunComponents do
   def transcript_item(%{item: %{kind: "pi.tool-result"}} = assigns) do
     ~H"""
     <details class={[
-      "rounded-box border px-3 py-2 text-xs",
+      "ml-10 rounded-box border px-3 py-2 text-xs",
       if(message(@item.payload)["isError"], do: "border-error/40", else: "border-base-300")
     ]}>
       <summary class="cursor-pointer font-mono text-base-content/70">
@@ -93,7 +142,7 @@ defmodule ConductorWeb.RunComponents do
 
   def transcript_item(%{item: %{kind: "conductor.note"}} = assigns) do
     ~H"""
-    <details class="rounded-box border border-base-300 px-3 py-2 text-xs">
+    <details class="ml-10 rounded-box border border-base-300 px-3 py-2 text-xs">
       <summary class="cursor-pointer font-semibold">{@item.payload["title"]}</summary>
       <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap">{truncate(@item.payload["text"], 8000)}</pre>
     </details>
