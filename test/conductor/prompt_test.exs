@@ -8,59 +8,81 @@ defmodule Conductor.PromptTest do
     slug: "shop",
     test_command: "mix test"
   }
+  @project %Conductor.Config.Project{
+    repo: @repo,
+    active_status: "In progress",
+    done_status: "Done"
+  }
 
   test "renders the issue, subtasks with complexity and dependencies, and the rules" do
     issue = %{
-      "key" => "SHOP-1",
+      "key" => "#1",
       "summary" => "Checkout",
-      "type" => "Story",
+      "type" => "Feature",
       "labels" => [],
       "description" => "Build checkout.",
       "subtasks" => [
         %{
-          "key" => "SHOP-2",
-          "number" => 2,
+          "key" => "#2",
           "summary" => "API",
-          "status" => "open",
-          "labels" => ["complexity:low"],
+          "status" => "Todo",
+          "size" => "S",
+          "priority" => "P1",
           "blocked_by" => [],
           "description" => ""
         },
         %{
-          "key" => "SHOP-3",
-          "number" => 3,
+          "key" => "#3",
           "summary" => "UI",
-          "status" => "open",
-          "labels" => [],
-          "blocked_by" => ["SHOP-2"],
+          "status" => "Todo",
+          "size" => nil,
+          "priority" => nil,
+          "blocked_by" => ["#2"],
           "description" => "Pages"
         }
       ]
     }
 
-    prompt = Prompt.render(issue, @repo, "feature/SHOP-1", "staging")
-    assert prompt =~ "# SHOP-1: Checkout"
-    assert prompt =~ "Status: open · Complexity: low"
-    assert prompt =~ "Complexity: high · Depends on: SHOP-2"
-    assert prompt =~ "### SHOP-3 (#3): UI"
+    prompt = Prompt.render(issue, @project, "feature/1", "staging")
+    assert prompt =~ "# #1: Checkout"
+    assert prompt =~ "### #3: UI"
+    assert prompt =~ "Status: Todo · Priority: P1 · Size: S · Complexity: low"
+    assert prompt =~ "Size: none · Complexity: high · Depends on: #2"
     assert prompt =~ "run_subagents"
-    assert prompt =~ "`close_issue` (repo `acme/shop`"
+    assert prompt =~ "move it to In progress with `set_issue_status`"
+    assert prompt =~ "move it to Done."
     assert prompt =~ "Run `mix test` before every push"
-    assert prompt =~ "[SHOP-1][SUBTASK-KEY]"
-    assert prompt =~ "`origin feature/SHOP-1`"
+    assert prompt =~ "[#1][#SUBTASK-NUMBER]"
+    assert prompt =~ "`origin feature/1`"
+  end
+
+  test "complexity follows the size" do
+    sizes = %{
+      "XS" => "low",
+      "S" => "low",
+      "M" => "medium",
+      "L" => "high",
+      "XL" => "high",
+      nil => "high"
+    }
+
+    for {size, complexity} <- sizes,
+        do: assert(Prompt.complexity(%{"size" => size}) == complexity)
   end
 
   test "an issue without subtasks commits under its own key" do
     issue = %{
-      "key" => "SHOP-4",
+      "key" => "#4",
       "summary" => "Typo",
       "labels" => [],
       "description" => nil,
       "subtasks" => []
     }
 
-    prompt = Prompt.render(issue, %{@repo | test_command: nil}, "bugfix/SHOP-4", "main")
-    assert prompt =~ "`[SHOP-4] Typo`"
+    prompt =
+      Prompt.render(issue, %{@project | repo: %{@repo | test_command: nil}}, "bugfix/4", "main")
+
+    assert prompt =~ "`[#4] Typo`"
     refute prompt =~ "run_subagents"
     refute prompt =~ "before every push"
   end

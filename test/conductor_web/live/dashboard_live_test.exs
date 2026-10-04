@@ -15,12 +15,12 @@ defmodule ConductorWeb.DashboardLiveTest do
   end
 
   test "lists runs, streams the live log, and retries", %{conn: conn, project: project} do
-    run = run_fixture(project, "SHOP-1", %{status: "failed", error: "boom"})
+    run = run_fixture(project, "shop-1", %{status: "failed", error: "boom"})
     {:ok, view, html} = live(conn, ~p"/")
-    assert html =~ "SHOP-1-1"
+    assert html =~ "shop-1-1"
     assert html =~ "boom"
 
-    view |> element("#log-SHOP-1-1") |> render_click()
+    view |> element("#log-shop-1-1") |> render_click()
 
     Runs.ingest(%{
       "type" => "agent_event",
@@ -37,8 +37,8 @@ defmodule ConductorWeb.DashboardLiveTest do
 
     assert render(view) =~ "bash ls -la"
 
-    view |> element("#retry-SHOP-1-1") |> render_click()
-    assert render(view) =~ "Queued SHOP-1-2"
-    eventually(fn -> assert render(view) =~ "SHOP-1-2" end)
+    view |> element("#retry-shop-1-1") |> render_click()
+    assert render(view) =~ "Queued shop-1-2"
+    eventually(fn -> assert render(view) =~ "shop-1-2" end)
   end
 end

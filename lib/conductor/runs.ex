@@ -42,10 +42,13 @@ defmodule Conductor.Runs do
   def active_count, do: Repo.aggregate(from(r in Run, where: r.status in @active), :count)
 
   def next_queued do
-    Repo.one(
-      from r in Run, where: r.status == "picked_up", order_by: [r.inserted_at, r.id], limit: 1
-    )
+    from(r in Run, where: r.status == "picked_up", order_by: [r.inserted_at, r.id])
+    |> Repo.all()
+    |> Enum.min_by(&priority_rank/1, fn -> nil end)
   end
+
+  # The highest priority first, the oldest among equals; issues without a priority come last.
+  defp priority_rank(run), do: (run.issue_snapshot || %{})["priority_rank"] || :infinity
 
   def open_issue_keys(keys) do
     terminal = Run.terminal_statuses()
@@ -99,9 +102,11 @@ defmodule Conductor.Runs do
 
   ## Transcript
 
+  # First-persisted order includes tool starts and notes, which have no runner position.
+  # Upserts preserve the row id, so replaying a snapshot does not move existing events.
   def list_events(run_id, conversation \\ nil) do
     query =
-      from e in Event, where: e.run_id == ^run_id, order_by: [e.conversation, e.position, e.id]
+      from e in Event, where: e.run_id == ^run_id, order_by: e.id
 
     query = if conversation, do: where(query, [e], e.conversation == ^conversation), else: query
     Repo.all(query)

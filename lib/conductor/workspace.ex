@@ -1,6 +1,6 @@
 defmodule Conductor.Workspace do
   @moduledoc """
-  Git working trees for runs, one per issue under `<root>/<repo>-issues/<KEY>`, cloned from a local mirror at
+  Git working trees for runs, one per issue under `<root>/<repo>-issues/<issue number>`, cloned from a local mirror at
   `<root>/mirrors/<repo>.git` so a new workspace costs no network clone.
 
   `provision/3` is idempotent: on an existing workspace it refreshes the remote refs and leaves a checked-out issue

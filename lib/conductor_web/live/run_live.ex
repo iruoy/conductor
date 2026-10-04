@@ -37,12 +37,20 @@ defmodule ConductorWeb.RunLive do
           <button
             :if={not Run.terminal?(@run) and @run.status != "handing_off"}
             id="abort"
-            phx-click="abort"
-            data-confirm="Abort this run?"
+            phx-click={show_modal("confirm-abort")}
             class="btn btn-sm btn-error btn-outline"
           >
             Abort
           </button>
+          <.confirm_modal
+            :if={not Run.terminal?(@run) and @run.status != "handing_off"}
+            id="confirm-abort"
+            title="Abort this run?"
+            confirm="Abort"
+            on_confirm={JS.push("abort")}
+          >
+            The agent stops and the run is marked as failed.
+          </.confirm_modal>
         </:actions>
       </.header>
 
@@ -54,33 +62,37 @@ defmodule ConductorWeb.RunLive do
       <section
         :for={q <- @open_questions}
         id={"question-#{q.qid}"}
-        class="rounded-box border border-warning p-4"
+        class="card card-border card-sm border-warning"
       >
-        <div class="mb-2 flex items-center gap-2 text-sm font-semibold text-warning">
-          <.icon name="hero-chat-bubble-left-ellipsis" class="size-5" /> The agent asks
+        <div class="card-body">
+          <h2 class="card-title text-sm text-warning">
+            <.icon name="hero-chat-bubble-left-ellipsis" class="size-5" /> The agent asks
+          </h2>
+          <p class="whitespace-pre-wrap text-sm">{q.text}</p>
+          <.form
+            for={to_form(%{"qid" => q.qid, "text" => ""})}
+            id={"answer-#{q.qid}"}
+            phx-submit="answer"
+          >
+            <input type="hidden" name="qid" value={q.qid} />
+            <.input type="textarea" name="text" value="" placeholder="Your answer" required />
+            <div class="card-actions">
+              <.button variant="primary" phx-disable-with="Sending…">Send answer</.button>
+            </div>
+          </.form>
         </div>
-        <p class="mb-3 whitespace-pre-wrap text-sm">{q.text}</p>
-        <.form
-          for={to_form(%{"qid" => q.qid, "text" => ""})}
-          id={"answer-#{q.qid}"}
-          phx-submit="answer"
-        >
-          <input type="hidden" name="qid" value={q.qid} />
-          <.input type="textarea" name="text" value="" placeholder="Your answer" required />
-          <.button variant="primary" phx-disable-with="Sending…">Send answer</.button>
-        </.form>
       </section>
 
       <div :if={@conversations != []} role="tablist" class="tabs tabs-border" id="conversations">
         <button
-          :for={{conversation, role} <- @conversations}
+          :for={{conversation, label} <- tab_labels(@conversations)}
           role="tab"
           id={"tab-#{conversation}"}
           phx-click="select"
           phx-value-conversation={conversation}
           class={["tab font-mono text-xs", @selected == conversation && "tab-active"]}
         >
-          {role}
+          {label}
         </button>
       </div>
 
@@ -97,27 +109,23 @@ defmodule ConductorWeb.RunLive do
       </div>
 
       <div :if={@live_text != "" or @live_tools != %{}} id="live" class="space-y-2">
-        <div
-          :if={@live_text != ""}
-          class="whitespace-pre-wrap px-1 text-sm leading-relaxed text-base-content/80"
-        >
-          {@live_text}<span class="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle"></span>
-        </div>
-        <div
+        <.chat_message :if={@live_text != ""} from="agent" text={@live_text} streaming />
+        <.fold
           :for={{call_id, tool} <- @live_tools}
           id={"live-tool-#{call_id}"}
-          class="rounded-box border border-info/40 px-3 py-2 text-xs"
+          class="border-info/40"
+          open
         >
-          <div class="flex items-center gap-2 font-mono">
+          <:title>
             <span class="loading loading-spinner loading-xs text-info"></span>
             <span class="font-semibold">{tool.name}</span>
             <span class="truncate text-base-content/70">{tool_args(tool.args)}</span>
-          </div>
+          </:title>
           <pre
             :if={tool.output != ""}
-            class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all"
+            class="max-h-64 overflow-auto whitespace-pre-wrap break-all"
           >{tool.output}</pre>
-        </div>
+        </.fold>
       </div>
     </Layouts.app>
     """
@@ -214,10 +222,14 @@ defmodule ConductorWeb.RunLive do
          "entry" => %{"kind" => kind} = entry
        }) do
     socket = if kind == "pi.assistant", do: assign(socket, live_text: ""), else: socket
+    item = item(conversation, entry)
+    calling = Enum.find(socket.assigns.calling, &(result_call_id(entry) in open_calls(&1)))
 
-    if kind == "pi.system",
-      do: socket,
-      else: stream_insert(socket, :items, item(conversation, entry))
+    cond do
+      kind == "pi.system" -> socket
+      kind == "pi.tool-result" and calling != nil -> insert(socket, put_result(calling, entry))
+      true -> insert(socket, item)
+    end
   end
 
   defp apply_event(socket, _conversation, %{"type" => "tool_execution_start"} = event) do
@@ -272,9 +284,34 @@ defmodule ConductorWeb.RunLive do
           |> Enum.reject(&(&1.kind == "tool_start")),
         else: []
 
+    items = items |> Enum.map(&item/1) |> merge_results()
+
     socket
     |> assign(selected: conversation, live_text: "", live_tools: %{})
-    |> stream(:items, Enum.map(items, &item/1), reset: true)
+    |> assign(calling: Enum.filter(items, &(open_calls(&1) != [])))
+    |> stream(:items, items, reset: true)
+  end
+
+  # `calling` keeps the assistant messages that still wait for a tool result, to put the result on its call.
+  defp insert(socket, item) do
+    calling = Enum.reject(socket.assigns.calling, &(&1.id == item.id))
+    calling = if open_calls(item) == [], do: calling, else: calling ++ [item]
+    socket |> assign(calling: calling) |> stream_insert(:items, item)
+  end
+
+  # A subtask's tab is its issue number (`sub:#12` is `#12`); one that ran more than once also counts its attempts.
+  defp tab_labels(conversations) do
+    attempts = Enum.frequencies_by(conversations, &elem(&1, 1))
+
+    {labels, _seen} =
+      Enum.map_reduce(conversations, %{}, fn {conversation, role}, seen ->
+        attempt = Map.get(seen, role, 0) + 1
+        label = String.replace_prefix(role, "sub:", "")
+        label = if attempts[role] > 1, do: "#{label} · attempt #{attempt}", else: label
+        {{conversation, label}, Map.put(seen, role, attempt)}
+      end)
+
+    labels
   end
 
   defp default_conversation(conversations) do

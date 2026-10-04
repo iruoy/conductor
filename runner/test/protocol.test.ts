@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FauxResponseStep, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
@@ -15,13 +16,17 @@ type Setup = { runner: Runner; events: Event[]; faux: ReturnType<typeof fauxProv
 const open: Runner[] = [];
 const dirs: string[] = [];
 
-async function setup(responses: FauxResponseStep[], storage: Storage = new MemoryStorage()): Promise<Setup> {
+async function setup(
+	responses: FauxResponseStep[],
+	storage: Storage = new MemoryStorage(),
+	github?: { baseUrl: string; token: string },
+): Promise<Setup> {
 	const faux = fauxProvider();
 	faux.setResponses(responses);
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const events: Event[] = [];
-	const runner = await Runner.open({ storage, models, emit: (e) => events.push(e) });
+	const runner = await Runner.open({ storage, models, emit: (e) => events.push(e), ...(github ? { github } : {}) });
 	open.push(runner);
 	return { runner, events, faux };
 }
@@ -126,6 +131,51 @@ describe("runner protocol", () => {
 		const text = toolResult.entry.model[0]!.content[0]!.text;
 		expect(text).toContain("## PROJ-7: done\n\nB is done");
 		expect(text.indexOf("PROJ-7")).toBeLessThan(text.indexOf("PROJ-6")); // in the order the head gave them
+	});
+
+	it("lets a subagent move its subtask through the project's statuses", async () => {
+		const requests: { url: string; body: { variables?: Record<string, string> } }[] = [];
+		const server = createServer((request, response) => {
+			let body = "";
+			request.on("data", (chunk) => (body += chunk));
+			request.on("end", () => {
+				requests.push({ url: request.url!, body: JSON.parse(body) });
+				response.setHeader("Content-Type", "application/json").end("{}");
+			});
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as { port: number };
+
+		try {
+			const tasks = [{ key: "#2", title: "Sub", instructions: "do it" }];
+			const { runner, events } = await setup(
+				[
+					fauxAssistantMessage([fauxToolCall("run_subagents", { tasks }, { id: "c1" })], { stopReason: "toolUse" }),
+					fauxAssistantMessage([fauxToolCall("set_issue_status", { number: 2, status: "in progress" }, { id: "c2" })], {
+						stopReason: "toolUse",
+					}),
+					fauxAssistantMessage("Sub is done"),
+					fauxAssistantMessage("Done.\nDONE"),
+				],
+				new MemoryStorage(),
+				{ baseUrl: `http://127.0.0.1:${port}`, token: "t" },
+			);
+			const github = {
+				repo: "acme/shop",
+				project_id: "project-1",
+				status_field_id: "status-field",
+				statuses: { "In progress": "option-progress", Done: "option-done" },
+				done_status: "Done",
+				items: { "2": "item-2" },
+			};
+			await start(runner, "PROJ-12-1", { github });
+			expect(await settledEvent(events, "PROJ-12-1")).toMatchObject({ outcome: "completed" });
+			expect(requests).toMatchObject([
+				{ url: "/graphql", body: { variables: { item: "item-2", option: "option-progress" } } },
+			]);
+		} finally {
+			server.close();
+		}
 	});
 
 	it("aborts a run waiting for input", async () => {

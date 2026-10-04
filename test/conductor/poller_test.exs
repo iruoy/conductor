@@ -17,11 +17,11 @@ defmodule Conductor.PollerTest do
     assert :ok = Poller.poll()
     assert :ok = Poller.poll()
 
-    assert ["SHOP-1-1", "SHOP-2-1"] =
+    assert ["#{project.repo.name}-1-1", "#{project.repo.name}-2-1"] ==
              Runs.list_by_status(["picked_up"]) |> Enum.map(& &1.id) |> Enum.sort()
 
     old =
-      run_fixture(project, "SHOP-3", %{status: "completed", workspace_path: Path.join(dir, "old")})
+      run_fixture(project, "shop-3", %{status: "completed", workspace_path: Path.join(dir, "old")})
 
     File.mkdir_p!(old.workspace_path)
 

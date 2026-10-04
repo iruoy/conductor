@@ -62,6 +62,7 @@ defmodule ConductorWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
+      phx-hook={@kind == :info && ".AutoDismiss"}
       role="alert"
       class="toast toast-top toast-end z-50"
       {@rest}
@@ -83,6 +84,18 @@ defmodule ConductorWeb.CoreComponents do
         </button>
       </div>
     </div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoDismiss">
+      // Info messages close themselves; a new message restarts the wait.
+      export default {
+        mounted() { this.wait() },
+        updated() { this.wait() },
+        destroyed() { clearTimeout(this.timer) },
+        wait() {
+          clearTimeout(this.timer)
+          this.timer = setTimeout(() => this.el.click(), 4000)
+        }
+      }
+    </script>
     """
   end
 
@@ -452,7 +465,43 @@ defmodule ConductorWeb.CoreComponents do
     """
   end
 
+  @doc """
+  Renders a dialog that asks before something that cannot be undone. Open it with `show_modal/1`.
+
+  ## Examples
+
+      <button phx-click={show_modal("confirm-delete")}>Delete</button>
+      <.confirm_modal id="confirm-delete" title="Delete shop?" confirm="Delete" on_confirm={JS.push("delete")} />
+  """
+  attr :id, :string, required: true
+  attr :title, :string, required: true
+  attr :confirm, :string, required: true, doc: "the label of the button that goes ahead"
+  attr :on_confirm, JS, required: true
+  slot :inner_block, doc: "what going ahead means"
+
+  def confirm_modal(assigns) do
+    ~H"""
+    <%!-- LiveView must not patch away the `open` the browser sets while the dialog is shown. --%>
+    <dialog id={@id} class="modal" phx-update="ignore">
+      <div class="modal-box whitespace-normal text-left font-normal">
+        <h3 class="text-lg font-bold">{@title}</h3>
+        <p :if={@inner_block != []} class="py-2 text-sm">{render_slot(@inner_block)}</p>
+        <form method="dialog" class="modal-action">
+          <button class="btn">{gettext("Cancel")}</button>
+          <button id={"#{@id}-confirm"} class="btn btn-error" phx-click={@on_confirm}>
+            {@confirm}
+          </button>
+        </form>
+      </div>
+      <form method="dialog" class="modal-backdrop"><button>{gettext("close")}</button></form>
+    </dialog>
+    """
+  end
+
   ## JS Commands
+
+  @doc "Opens the dialog with this id, such as a `confirm_modal/1`."
+  def show_modal(js \\ %JS{}, id), do: JS.dispatch(js, "conductor:show-modal", to: "##{id}")
 
   def show(js \\ %JS{}, selector) do
     JS.show(js,

@@ -23,7 +23,12 @@ defmodule Conductor.Config do
 
   ## Projects
 
-  def list_projects, do: Repo.all(from p in Project, order_by: p.key, preload: :repo)
+  def list_projects,
+    do:
+      Repo.all(
+        from p in Project, order_by: [p.project_owner, p.project_number, p.id], preload: :repo
+      )
+
   def list_enabled_projects, do: Repo.all(from p in Project, where: p.enabled, preload: :repo)
   def get_project!(id), do: Repo.get!(Project, id) |> Repo.preload(:repo)
   def change_project(%Project{} = project, attrs \\ %{}), do: Project.changeset(project, attrs)
@@ -39,7 +44,7 @@ defmodule Conductor.Config do
       {:error,
        Ecto.Changeset.add_error(
          change_project(project),
-         :key,
+         :project_number,
          "has runs and cannot be deleted"
        )}
   end

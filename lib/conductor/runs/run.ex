@@ -1,6 +1,6 @@
 defmodule Conductor.Runs.Run do
   @moduledoc """
-  One attempt at one issue, with id `KEY-attempt`.
+  One attempt at one issue, with id `<issue key>-<attempt>` (`shop-12-1`).
 
   Status: `picked_up → provisioning → running ⇄ waiting_for_input → handing_off → completed | failed`.
   """

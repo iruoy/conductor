@@ -37,6 +37,9 @@ topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 
+// Dialogs open from the server-rendered `show_modal/1` JS command
+window.addEventListener("conductor:show-modal", event => event.target.showModal())
+
 // connect if there are any LiveViews on the page
 liveSocket.connect()
 
