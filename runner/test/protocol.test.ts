@@ -8,6 +8,7 @@ import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { afterEach, describe, expect, it } from "vitest";
 import { waves } from "../src/agent.ts";
+import { levelForEffort } from "../src/defaults.ts";
 import { type Event, parseVerdict, Runner } from "../src/runner.ts";
 
 const head = { provider: "faux", modelId: "faux-1" };
@@ -209,6 +210,24 @@ describe("runner protocol", () => {
 		expect(sync.runs).toMatchObject([{ run_id: "PROJ-10-1", status: "waiting_for_input" }]);
 		await second.runner.handle({ type: "answer", run_id: "PROJ-10-1", qid: sync.runs[0]!.questions[0]!.qid, text: "yes" });
 		expect(await settledEvent(second.events, "PROJ-10-1")).toMatchObject({ outcome: "completed" });
+	});
+
+	it("lists the models with the thinking levels pi supports for each", async () => {
+		const { runner } = await setup([]);
+		const models = (await runner.handle({ type: "models" })) as { provider: string; id: string; levels: string[] }[];
+		expect(models.length).toBeGreaterThan(0);
+		for (const model of models) expect(model.levels.length).toBeGreaterThan(0);
+		// Only a provider that echoes its effective effort has a default to report.
+		const { provider, id } = models[0]!;
+		expect(await runner.handle({ type: "model_default", provider, model_id: id })).toBeNull();
+	});
+
+	it("maps a provider's effort back to the pi level of the model", () => {
+		const model = { reasoning: true, thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh" } } as never;
+		expect(levelForEffort(model, "medium")).toBe("medium");
+		expect(levelForEffort(model, "xhigh")).toBe("xhigh");
+		expect(levelForEffort(model, "none")).toBeNull();
+		expect(levelForEffort({ reasoning: true } as never, "none")).toBe("off");
 	});
 
 	it("replies with errors for bad commands", async () => {
