@@ -6,10 +6,17 @@ defmodule Conductor.Runs do
   `{:agent_event, payload}`, `{:question, question}`). Streaming deltas only travel over PubSub; finished messages and
   tool starts are also persisted, upserted by `(run_id, conversation, entry)`.
   """
+  use Ash.Domain
+  require Ash.Query
   import Ecto.Query
   require Logger
   alias Conductor.Repo
   alias Conductor.Runs.{Event, Question, Run}
+
+  resources do
+    resource Run
+    resource Question
+  end
 
   @pubsub Conductor.PubSub
   @active ~w(provisioning running handing_off)
@@ -21,44 +28,34 @@ defmodule Conductor.Runs do
   ## Runs
 
   def list_runs(limit \\ 200) do
-    Repo.all(
-      from r in Run, order_by: [desc: r.inserted_at, desc: r.id], limit: ^limit, preload: :project
-    )
+    Run
+    |> Ash.Query.sort(inserted_at: :desc, id: :desc)
+    |> Ash.Query.limit(limit)
+    |> Ash.Query.load(:project)
+    |> Ash.read!()
   end
 
-  def get_run(id), do: Repo.get(Run, id) |> load_project_repo()
-  def get_run!(id), do: Repo.get!(Run, id) |> load_project_repo()
+  def get_run(id), do: Ash.get!(Run, id, load: [project: :repo], not_found_error?: false)
+  def get_run!(id), do: Ash.get!(Run, id, load: [project: :repo], not_found_error?: true)
 
   def list_by_status(statuses) do
-    Repo.all(
-      from r in Run,
-        where: r.status in ^statuses,
-        order_by: r.inserted_at,
-        preload: :project
-    )
-    |> load_project_repos()
-  end
-
-  # Ecto can load the Ash-generated Project schema, but does not recognize
-  # Ash.NotLoaded on its relationships. Load those through Ash instead.
-  defp load_project_repo(nil), do: nil
-
-  defp load_project_repo(%Run{} = run) do
-    run = Repo.preload(run, :project)
-    %{run | project: Ash.load!(run.project, :repo)}
-  end
-
-  defp load_project_repos(runs) do
-    projects = runs |> Enum.map(& &1.project) |> Ash.load!(:repo) |> Map.new(&{&1.id, &1})
-    Enum.map(runs, &%{&1 | project: Map.fetch!(projects, &1.project_id)})
+    Run
+    |> Ash.Query.filter(status in ^statuses)
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.Query.load(project: :repo)
+    |> Ash.read!()
   end
 
   @doc "Runs that hold a concurrency slot. A run waiting for a human does not."
-  def active_count, do: Repo.aggregate(from(r in Run, where: r.status in @active), :count)
+  def active_count do
+    Run |> Ash.Query.filter(status in ^@active) |> Ash.count!()
+  end
 
   def next_queued do
-    from(r in Run, where: r.status == "picked_up", order_by: [r.inserted_at, r.id])
-    |> Repo.all()
+    Run
+    |> Ash.Query.filter(status == "picked_up")
+    |> Ash.Query.sort([:inserted_at, :id])
+    |> Ash.read!()
     |> Enum.min_by(&priority_rank/1, fn -> nil end)
   end
 
@@ -68,34 +65,48 @@ defmodule Conductor.Runs do
   def open_issue_keys(keys) do
     terminal = Run.terminal_statuses()
 
-    Repo.all(
-      from r in Run,
-        where: r.issue_key in ^keys and r.status not in ^terminal,
-        select: r.issue_key,
-        distinct: true
-    )
+    Run
+    |> Ash.Query.filter(issue_key in ^keys and status not in ^terminal)
+    |> Ash.Query.select(:issue_key)
+    |> Ash.read!()
+    |> Enum.map(& &1.issue_key)
+    |> Enum.uniq()
   end
 
   def create_run(project, issue_key, snapshot) do
     attempt =
-      (Repo.one(from r in Run, where: r.issue_key == ^issue_key, select: max(r.attempt)) || 0) + 1
+      (Run |> Ash.Query.filter(issue_key == ^issue_key) |> Ash.max!(:attempt) || 0) + 1
 
-    %Run{
+    Run
+    |> Ash.Changeset.for_create(:create, %{
       id: Run.id_for(issue_key, attempt),
       issue_key: issue_key,
       attempt: attempt,
-      project_id: project.id
-    }
-    |> Run.changeset(%{status: "picked_up", issue_snapshot: snapshot})
-    |> Repo.insert()
+      project_id: project.id,
+      status: "picked_up",
+      issue_snapshot: snapshot
+    })
+    |> persist(:create)
     |> tap_ok(&broadcast/1)
   end
 
   def update_run(%Run{} = run, attrs) do
     run
-    |> Run.changeset(attrs)
-    |> Repo.update()
+    |> Ash.Changeset.for_update(:update, attrs, skip_unknown_inputs: [:*])
+    |> persist(:update)
     |> tap_ok(&broadcast/1)
+  end
+
+  # Keep the existing context error contract while Ash owns validation/persistence.
+  defp persist(changeset, action) do
+    case apply(Ash, action, [changeset]) do
+      {:ok, record} ->
+        {:ok, record}
+
+      {:error, error} ->
+        {:error,
+         Conductor.Config.FormAdapter.changeset(changeset, Ash.Error.to_error_class(error).errors)}
+    end
   end
 
   @doc "Terminal runs whose workspace is older than `days`."
@@ -103,14 +114,15 @@ defmodule Conductor.Runs do
     cutoff = DateTime.utc_now() |> DateTime.add(-days, :day)
     terminal = Run.terminal_statuses()
 
-    Repo.all(
-      from r in Run,
-        where: r.status in ^terminal and not is_nil(r.workspace_path) and r.updated_at < ^cutoff
+    Run
+    |> Ash.Query.filter(
+      status in ^terminal and not is_nil(workspace_path) and updated_at < ^cutoff
     )
+    |> Ash.read!()
   end
 
   defp broadcast(%Run{} = run) do
-    run = Repo.preload(run, :project)
+    run = Ash.load!(run, :project)
     Phoenix.PubSub.broadcast(@pubsub, "runs", {:run_updated, run})
     Phoenix.PubSub.broadcast(@pubsub, "run:" <> run.id, {:run_updated, run})
   end
@@ -153,7 +165,8 @@ defmodule Conductor.Runs do
   end
 
   def ingest(%{"type" => "question", "run_id" => run_id, "qid" => qid, "text" => text}) do
-    with %Run{} <- Repo.get(Run, run_id), {:ok, question} <- upsert_question(run_id, qid, text) do
+    with %Run{} <- Ash.get!(Run, run_id, not_found_error?: false),
+         {:ok, question} <- upsert_question(run_id, qid, text) do
       Phoenix.PubSub.broadcast(@pubsub, "run:" <> run_id, {:question, question})
     end
 
@@ -162,7 +175,7 @@ defmodule Conductor.Runs do
 
   def ingest(%{"type" => "run_state", "run_id" => run_id, "status" => status})
       when status in ~w(running waiting_for_input) do
-    case Repo.get(Run, run_id) do
+    case Ash.get!(Run, run_id, not_found_error?: false) do
       %Run{status: current} = run
       when current in ~w(running waiting_for_input) and current != status ->
         update_run(run, %{status: status})
@@ -227,22 +240,26 @@ defmodule Conductor.Runs do
   ## Questions
 
   def list_questions(run_id) do
-    Repo.all(from q in Question, where: q.run_id == ^run_id, order_by: q.inserted_at)
+    Question
+    |> Ash.Query.filter(run_id == ^run_id)
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.read!()
   end
 
-  def get_question(run_id, qid), do: Repo.get_by(Question, run_id: run_id, qid: qid)
+  def get_question(run_id, qid) do
+    Question |> Ash.Query.filter(run_id == ^run_id and qid == ^qid) |> Ash.read_one!()
+  end
 
   def upsert_question(run_id, qid, text) do
-    case get_question(run_id, qid) do
-      nil -> Repo.insert(%Question{run_id: run_id, qid: qid, text: text})
-      question -> {:ok, question}
-    end
+    Question
+    |> Ash.Changeset.for_create(:create, %{run_id: run_id, qid: qid, text: text})
+    |> persist(:create)
   end
 
   def answer_question(%Question{} = question, answer) do
     question
-    |> Ecto.Changeset.change(answer: answer, answered_at: DateTime.utc_now(:second))
-    |> Repo.update()
+    |> Ash.Changeset.for_update(:update, %{answer: answer, answered_at: DateTime.utc_now(:second)})
+    |> persist(:update)
     |> tap_ok(&Phoenix.PubSub.broadcast(@pubsub, "run:" <> &1.run_id, {:question, &1}))
   end
 
@@ -253,8 +270,8 @@ defmodule Conductor.Runs do
 
       if answered and is_nil(question.answered_at) do
         question
-        |> Ecto.Changeset.change(answered_at: DateTime.utc_now(:second))
-        |> Repo.update!()
+        |> Ash.Changeset.for_update(:update, %{answered_at: DateTime.utc_now(:second)})
+        |> Ash.update!()
       end
     end
 
