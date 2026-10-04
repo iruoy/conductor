@@ -1,0 +1,81 @@
+defmodule Conductor.WorkspaceTest do
+  use ExUnit.Case, async: false
+  import Conductor.Fixtures, only: [git_remote: 1, git_remote: 2, git!: 2]
+  alias Conductor.Config.Repository
+  alias Conductor.Workspace
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: dir} do
+    Application.put_env(:conductor, :workspace_root, Path.join(dir, "ws"))
+    on_exit(fn -> Application.delete_env(:conductor, :workspace_root) end)
+    :ok
+  end
+
+  defp repo(remote, attrs \\ %{}) do
+    struct!(
+      %Repository{name: "shop", clone_url: remote, owner: "acme", slug: "shop"},
+      attrs
+    )
+  end
+
+  test "clones from a mirror onto a feature branch from staging", %{tmp_dir: dir} do
+    remote = git_remote(dir)
+
+    assert {:ok, %{path: path, branch: "feature/SHOP-1", base: "staging", setup_output: nil}} =
+             Workspace.provision(repo(remote), "SHOP-1", %{"type" => "Story"})
+
+    assert path == Path.join([dir, "ws", "shop-issues", "SHOP-1"])
+    assert File.dir?(Path.join([dir, "ws", "mirrors", "shop.git"]))
+    assert File.exists?(Path.join(path, "STAGING.md"))
+    assert git!(path, ["rev-parse", "--abbrev-ref", "HEAD"]) == "feature/SHOP-1"
+    assert git!(path, ["remote", "get-url", "origin"]) == remote
+  end
+
+  test "is idempotent and keeps work in progress", %{tmp_dir: dir} do
+    remote = git_remote(dir)
+    {:ok, %{path: path}} = Workspace.provision(repo(remote), "SHOP-2", %{})
+    File.write!(Path.join(path, "wip.txt"), "unsaved")
+
+    assert {:ok, %{path: ^path}} = Workspace.provision(repo(remote), "SHOP-2", %{})
+    assert File.read!(Path.join(path, "wip.txt")) == "unsaved"
+  end
+
+  test "uses bugfix branches for bugs and main without staging", %{tmp_dir: dir} do
+    remote = git_remote(dir, staging: false)
+
+    assert {:ok, %{branch: "bugfix/SHOP-3", base: "main", path: path}} =
+             Workspace.provision(repo(remote), "SHOP-3", %{"type" => "Bug"})
+
+    refute File.exists?(Path.join(path, "STAGING.md"))
+  end
+
+  test "continues a pushed branch of an earlier attempt", %{tmp_dir: dir} do
+    remote = git_remote(dir)
+    seed = Path.join(dir, "seed")
+    git!(seed, ["switch", "-c", "feature/SHOP-4"])
+    File.write!(Path.join(seed, "earlier.txt"), "x")
+    git!(seed, ["add", "."])
+    git!(seed, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "earlier"])
+    git!(seed, ["push", remote, "feature/SHOP-4"])
+
+    assert {:ok, %{path: path}} = Workspace.provision(repo(remote), "SHOP-4", %{})
+    assert File.exists?(Path.join(path, "earlier.txt"))
+  end
+
+  test "runs the setup script once and reports failures", %{tmp_dir: dir} do
+    remote = git_remote(dir)
+    ok = repo(remote, %{setup_script: "echo installing; touch .installed"})
+
+    assert {:ok, %{setup_output: "installing\n", path: path}} =
+             Workspace.provision(ok, "SHOP-5", %{})
+
+    assert File.exists?(Path.join(path, ".installed"))
+    assert {:ok, %{setup_output: nil}} = Workspace.provision(ok, "SHOP-5", %{})
+
+    failing = repo(remote, %{setup_script: "echo broken; exit 3"})
+
+    assert {:error, "setup script exited with 3:\nbroken\n"} =
+             Workspace.provision(failing, "SHOP-6", %{})
+  end
+end
