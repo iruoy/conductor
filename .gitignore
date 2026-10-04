@@ -35,11 +35,6 @@ conductor-*.tar
 npm-debug.log
 /assets/node_modules/
 
-# Database files
-*.db
-*.db-*
-
-
 # The runner's durable state and build output live under runner/ (see runner/.gitignore).
 
 # Editor language server
