@@ -2,7 +2,7 @@ defmodule Conductor.Fixtures do
   @moduledoc "Test data: config rows, runs, a local git remote, and GitHub stubs."
   import ExUnit.Assertions
   import ExUnit.Callbacks, only: [start_supervised!: 1]
-  alias Conductor.{Config, Repo, Runs}
+  alias Conductor.{Config, Runs}
 
   def repo_fixture(attrs \\ %{}) do
     {:ok, repo} =
@@ -36,7 +36,7 @@ defmodule Conductor.Fixtures do
       })
       |> Config.create_project()
 
-    Repo.preload(project, :repo)
+    Ash.load!(project, :repo)
   end
 
   def settings_fixture(attrs \\ %{}) do

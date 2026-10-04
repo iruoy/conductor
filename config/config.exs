@@ -9,7 +9,7 @@ import Config
 
 config :conductor,
   ecto_repos: [Conductor.Repo],
-  ash_domains: [],
+  ash_domains: [Conductor.Config],
   generators: [timestamp_type: :utc_datetime]
 
 # Opt into the recommended Ash defaults for the next major version.

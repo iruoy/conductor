@@ -26,16 +26,31 @@ defmodule Conductor.Runs do
     )
   end
 
-  def get_run(id), do: Repo.get(Run, id) |> Repo.preload(project: :repo)
-  def get_run!(id), do: Repo.get!(Run, id) |> Repo.preload(project: :repo)
+  def get_run(id), do: Repo.get(Run, id) |> load_project_repo()
+  def get_run!(id), do: Repo.get!(Run, id) |> load_project_repo()
 
   def list_by_status(statuses) do
     Repo.all(
       from r in Run,
         where: r.status in ^statuses,
         order_by: r.inserted_at,
-        preload: [project: :repo]
+        preload: :project
     )
+    |> load_project_repos()
+  end
+
+  # Ecto can load the Ash-generated Project schema, but does not recognize
+  # Ash.NotLoaded on its relationships. Load those through Ash instead.
+  defp load_project_repo(nil), do: nil
+
+  defp load_project_repo(%Run{} = run) do
+    run = Repo.preload(run, :project)
+    %{run | project: Ash.load!(run.project, :repo)}
+  end
+
+  defp load_project_repos(runs) do
+    projects = runs |> Enum.map(& &1.project) |> Ash.load!(:repo) |> Map.new(&{&1.id, &1})
+    Enum.map(runs, &%{&1 | project: Map.fetch!(projects, &1.project_id)})
   end
 
   @doc "Runs that hold a concurrency slot. A run waiting for a human does not."
