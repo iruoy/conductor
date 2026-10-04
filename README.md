@@ -17,7 +17,7 @@ Poller ─search─▶ Coordinator ──provision──▶ Workspace (mirror �
 ## Setup
 
 Start PostgreSQL before setup. By default, Conductor connects as `postgres` with password `postgres` on
-`localhost` (override with `PGUSER`, `PGPASSWORD`, and `PGHOST`). For example, to use a local PostgreSQL Unix
+`localhost:5432` (override with `PGUSER`, `PGPASSWORD`, `PGHOST`, and `PGPORT`). For example, to use a local PostgreSQL Unix
 socket, set `PGHOST=/run/postgresql`.
 
 ```sh
@@ -34,7 +34,7 @@ Environment:
 
 | Variable | Used for |
 |---|---|
-| `GITHUB_TOKEN` | Polling, issue snapshots, status labels, checking the pushed branch and opening the PR (Phoenix), and the agent's `close_issue` tool. Needs read/write on issues and pull requests |
+| `GITHUB_TOKEN` | Reading the project and its issues, moving issues between statuses, checking the pushed branch and opening the PR (Phoenix), and the agent's `set_issue_status` tool. Needs read/write on projects, issues and pull requests (a classic token: `repo` and `project`) |
 | `DATABASE_URL` | PostgreSQL connection URL in production |
 | `CONDUCTOR_WORKSPACES` | Workspace root, default `~/conductor-workspaces` |
 | `CONDUCTOR_RUNNER_DATA` | Runner state directory, default `runner/data` |
@@ -44,17 +44,24 @@ Git pushes use the machine's own git credentials (SSH agent or credential helper
 
 ## How a run goes
 
-1. The Poller searches `repo:<owner>/<name> is:issue is:open assignee:<runner> label:"<pickup>"` every minute and
-   queues issue `#12` of project `KEY` as run `KEY-12-1` (`picked_up`). GitHub has no workflow statuses, so a
-   project's statuses are labels: an issue carries the pickup, the active or the hand-off label.
-2. When a slot is free (`max_concurrent`; runs waiting for a human do not count), the Coordinator swaps the pickup
-   label for the active one, provisions `<root>/<repo>-issues/<KEY>` on `feature/KEY` or `bugfix/KEY` from staging (else
-   main), runs the setup script once, and sends `start_run` with the rendered prompt.
-3. The head agent implements the subtasks through `run_subagents` (one child conversation per sub-issue, model by
-   complexity label, "blocked by" dependency waves), closes finished sub-issues, tests, commits, pushes, and ends with `DONE` or
-   `FAILED: reason`. `ask_human` questions, and a final message without a verdict, appear on the run page to answer.
-4. On `DONE` the Coordinator checks the branch was pushed, opens (or finds) the PR (`Closes #12`), and gives the issue
-   the hand-off label. Retry starts `KEY-(attempt+1)`; finished workspaces are pruned after `prune_days`.
+1. Every minute the Poller reads the GitHub Project of each Conductor project and picks up the open issues of its
+   repository that are assigned to the runner and in the pickup status. Issue `#12` of repository `shop` becomes run
+   `shop-12-1` (`picked_up`). Relationships come first: an issue that is blocked by an open issue waits for it, and
+   a sub-issue whose open parent is assigned to the runner is left to the parent's run.
+2. Queued runs start by the issue's Priority in the project (the order of the field's options, issues without one
+   last), the oldest first among equals. When a slot is free (`max_concurrent`; runs waiting for a human do not
+   count), the Coordinator moves the issue to the active status, provisions `<root>/<repo>-issues/<number>` on
+   `feature/<number>` or `bugfix/<number>` (issue type or label "bug") from staging (else main), runs the setup
+   script once, and sends `start_run` with the rendered prompt.
+3. The head agent implements the sub-issues through `run_subagents` (one child conversation per sub-issue, model by
+   the sub-issue's Size in the project: XS and S low, M medium, the rest high; "blocked by" dependency waves), moves
+   them to the active and the done status with `set_issue_status` (done also closes the sub-issue), tests, commits,
+   pushes, and ends with `DONE` or `FAILED: reason`. `ask_human` questions, and a final message without a verdict,
+   appear on the run page to answer.
+4. On `DONE` the Coordinator checks the branch was pushed, opens (or finds) the PR (`Closes #12`), and moves the
+   issue to the hand-off status. Retry starts `shop-12-2`; finished workspaces are pruned after `prune_days`.
+
+The project's fields must be single-select fields named `Status`, `Size` and `Priority`, as in GitHub's templates.
 
 Crashes: the runner keeps every conversation, tool call and run in `durable.sqlite` and resumes them on start. If it
 dies, the Runner process restarts it and the Coordinator reconciles: runs the runner does not know are sent again

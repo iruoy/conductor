@@ -16,22 +16,22 @@ defmodule ConductorWeb.RunLiveTest do
   end
 
   test "shows the transcript and sends answers to the runner", %{conn: conn, project: project} do
-    {:ok, _} = Coordinator.enqueue(project, "SHOP-2", snapshot("SHOP-2", "Ask [fake:ask]"))
-    assert_receive {:run_updated, %{id: "SHOP-2-1", status: "waiting_for_input"}}, 10_000
+    {:ok, _} = Coordinator.enqueue(project, "shop-2", snapshot("shop-2", "Ask [fake:ask]"))
+    assert_receive {:run_updated, %{id: "shop-2-1", status: "waiting_for_input"}}, 10_000
 
-    {:ok, view, html} = live(conn, ~p"/runs/SHOP-2-1")
-    assert html =~ "# SHOP-2: Ask [fake:ask]"
+    {:ok, view, html} = live(conn, ~p"/runs/shop-2-1")
+    assert html =~ "<h1>#2: Ask [fake:ask]</h1>"
     assert html =~ "Which way?"
 
     view |> form("#answer-q1", %{"text" => "left"}) |> render_submit()
-    assert_receive {:run_updated, %{id: "SHOP-2-1", status: "completed"}}, 5_000
+    assert_receive {:run_updated, %{id: "shop-2-1", status: "completed"}}, 5_000
     eventually(fn -> assert render(view) =~ "Did it." end)
     refute render(view) =~ "Which way?"
-    assert [%{answer: "left"}] = Runs.list_questions("SHOP-2-1")
+    assert [%{answer: "left"}] = Runs.list_questions("shop-2-1")
   end
 
   test "streams live text and tool output", %{conn: conn, project: project} do
-    run = run_fixture(project, "SHOP-3", %{status: "running"})
+    run = run_fixture(project, "shop-3", %{status: "running"})
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
 
     send_event = fn event ->
@@ -51,7 +51,19 @@ defmodule ConductorWeb.RunLiveTest do
       "changes" => [%{"type" => "text_delta", "delta" => "Thinking out loud"}]
     })
 
+    # Aborting a run that is still going asks first, in a dialog.
+    assert has_element?(view, "dialog#confirm-abort #confirm-abort-confirm", "Abort")
+
     assert render(view) =~ "Thinking out loud"
+
+    # Markdown is rendered, and HTML in it is shown as text.
+    send_event.(%{
+      "type" => "message_update",
+      "changes" => [%{"type" => "text_delta", "delta" => " in **bold** <script>x</script>"}]
+    })
+
+    assert has_element?(view, "#live .prose strong", "bold")
+    refute has_element?(view, "#live script")
 
     send_event.(%{
       "type" => "tool_execution_start",
@@ -69,5 +81,25 @@ defmodule ConductorWeb.RunLiveTest do
 
     assert render(view) =~ "3 tests, 0 failures"
     assert has_element?(view, "#tab-4", "head")
+
+    # Once the result is in, it shows on the tool call, also after a reload.
+    call = %{"type" => "toolCall", "id" => "t1", "name" => "bash", "arguments" => %{}}
+    result = %{"role" => "toolResult", "toolCallId" => "t1", "toolName" => "bash"}
+    result = Map.put(result, "content", [%{"type" => "text", "text" => "all green"}])
+
+    for {id, kind, message} <- [
+          {1, "pi.assistant", %{"content" => [call]}},
+          {2, "pi.tool-result", result}
+        ] do
+      entry = %{"id" => id, "kind" => kind, "model" => [message]}
+      send_event.(%{"type" => "message_end", "entry" => entry})
+    end
+
+    assert has_element?(view, "#items-ev-4-e-1 details", "all green")
+    refute has_element?(view, "#items-ev-4-e-2")
+
+    {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+    assert has_element?(view, "#items-ev-4-e-1 details", "all green")
+    refute has_element?(view, "#items-ev-4-e-2")
   end
 end

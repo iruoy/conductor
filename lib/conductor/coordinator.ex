@@ -2,7 +2,7 @@ defmodule Conductor.Coordinator do
   @moduledoc """
   Moves runs through their lifecycle and keeps at most `max_concurrent` of them busy.
 
-  The database is the queue: `picked_up` runs wait for a slot, and `provisioning`, `running` and `handing_off` runs
+  The database is the queue: `picked_up` runs wait for a slot, the highest priority first, and `provisioning`, `running` and `handing_off` runs
   hold one (a run waiting for a human does not). Provisioning and hand-off run as tasks under `Conductor.Jobs`; both
   are idempotent, so on start the Coordinator reconciles the database with the runner (`sync`) and simply re-runs
   whatever was interrupted.
@@ -23,7 +23,7 @@ defmodule Conductor.Coordinator do
     run = Runs.get_run!(run_id)
 
     snapshot =
-      case GitHub.issue(run.project, run.issue_key) do
+      case GitHub.issue(run.project, GitHub.number(run.issue_key)) do
         {:ok, snapshot} -> snapshot
         {:error, _} -> run.issue_snapshot
       end
@@ -240,19 +240,23 @@ defmodule Conductor.Coordinator do
     project = run.project
     repo = project.repo
 
-    with {:ok, _} <- GitHub.transition(project, run.issue_key, project.active_label),
-         {:ok, ws} <- Workspace.provision(repo, run.issue_key, run.issue_snapshot),
+    number = GitHub.number(run.issue_key)
+
+    with {:ok, _} <- GitHub.transition(project, number, project.active_status),
+         {:ok, github} <- GitHub.run_context(project, run.issue_snapshot),
+         {:ok, ws} <- Workspace.provision(repo, Integer.to_string(number), run.issue_snapshot),
          {:ok, run} <- Runs.update_run(run, %{workspace_path: ws.path, branch: ws.branch}),
          :ok <- record_setup(run, ws.setup_output),
          models when is_map(models) <-
            Config.run_models(Config.get_settings()) || {:error, "no head model configured"},
-         prompt = Prompt.render(run.issue_snapshot, repo, ws.branch, ws.base),
+         prompt = Prompt.render(run.issue_snapshot, project, ws.branch, ws.base),
          command = %{
            type: "start_run",
            run_id: run.id,
            cwd: ws.path,
            prompt: prompt,
-           models: models
+           models: models,
+           github: github
          },
          {:ok, _} <- Runner.call(command) do
       case Runs.get_run!(run_id) do
@@ -272,13 +276,14 @@ defmodule Conductor.Coordinator do
 
     case run.outcome do
       "completed" ->
-        title = "[#{run.issue_key}] #{run.issue_snapshot["summary"]}"
+        number = GitHub.number(run.issue_key)
+        title = "[##{number}] #{run.issue_snapshot["summary"]}"
         base = Workspace.base_branch(repo, run.workspace_path)
 
         with {:ok, true} <- GitHub.branch_exists?(repo, run.branch),
              {:ok, url} <-
                GitHub.find_or_create_pr(repo, run.branch, base, title, pr_description(run)),
-             {:ok, _} <- GitHub.transition(run.project, run.issue_key, run.project.handoff_label) do
+             {:ok, _} <- GitHub.transition(run.project, number, run.project.handoff_status) do
           {:ok, _} = Runs.update_run(run, %{status: "completed", pr_url: url})
           :ok
         else

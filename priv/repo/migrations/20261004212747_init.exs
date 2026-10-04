@@ -16,18 +16,20 @@ defmodule Conductor.Repo.Migrations.Init do
     create unique_index(:repos, [:name])
 
     create table(:projects) do
-      add :key, :string, null: false
+      add :project_owner, :string, null: false
+      add :project_number, :integer, null: false, default: 0
       add :runner_login, :string, null: false
-      add :pickup_label, :string, null: false
-      add :active_label, :string, null: false
-      add :handoff_label, :string, null: false
-      add :search_extra, :string
+      add :pickup_status, :string, null: false
+      add :active_status, :string, null: false
+      add :handoff_status, :string, null: false
+      add :done_status, :string, null: false, default: "Done"
+      add :item_filter, :string
       add :enabled, :boolean, null: false, default: true
       add :repo_id, references(:repos, on_delete: :restrict), null: false
       timestamps(type: :utc_datetime)
     end
 
-    create unique_index(:projects, [:key])
+    create unique_index(:projects, [:repo_id, :project_owner, :project_number])
 
     create table(:settings) do
       add :models, :map, null: false, default: %{}

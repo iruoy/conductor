@@ -9,6 +9,9 @@
 /* Required for Tailwind to automatically pick up changes in colocated CSS files in dev */
 @source "../../_build/dev/phoenix-colocated/conductor/*/";
 
+/* Styles rendered Markdown (the "prose" classes); daisyUI gives it the theme's colors. */
+@plugin "@tailwindcss/typography";
+
 /* A Tailwind plugin that makes "hero-#{ICON}" classes available.
    The heroicons installation itself is managed by your mix.exs */
 @plugin "../vendor/heroicons";

@@ -36,20 +36,17 @@ defmodule ConductorWeb.Layouts do
   def app(assigns) do
     ~H"""
     <header class="navbar border-b border-base-300 px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <.link
-          navigate={~p"/"}
-          class="flex w-fit items-center gap-2 text-lg font-semibold tracking-tight"
-        >
+      <div class="navbar-start">
+        <.link navigate={~p"/"} class="btn btn-ghost text-lg">
           <.icon name="hero-musical-note" class="size-5 text-primary" /> Conductor
         </.link>
       </div>
-      <nav class="flex-none">
-        <ul class="flex items-center gap-1">
-          <li><.link navigate={~p"/"} class="btn btn-ghost btn-sm">Runs</.link></li>
-          <li><.link navigate={~p"/config"} class="btn btn-ghost btn-sm">Config</.link></li>
-          <li class="ml-2"><.theme_toggle /></li>
+      <nav class="navbar-end gap-2">
+        <ul class="menu menu-horizontal">
+          <li><.link navigate={~p"/"}>Runs</.link></li>
+          <li><.link navigate={~p"/config"}>Config</.link></li>
         </ul>
+        <.theme_toggle />
       </nav>
     </header>
 

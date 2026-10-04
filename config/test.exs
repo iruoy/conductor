@@ -1,5 +1,12 @@
 import Config
 
+# Postgrex requires socket_dir rather than hostname for Unix-socket connections.
+pg_host = System.get_env("PGHOST") || "localhost"
+
+config :conductor,
+       Conductor.Repo,
+       if(Path.type(pg_host) == :absolute, do: [socket_dir: pg_host], else: [hostname: pg_host])
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
@@ -8,7 +15,7 @@ import Config
 config :conductor, Conductor.Repo,
   username: System.get_env("PGUSER") || "postgres",
   password: System.get_env("PGPASSWORD") || "postgres",
-  hostname: System.get_env("PGHOST") || "localhost",
+  port: String.to_integer(System.get_env("PGPORT") || "5432"),
   database: "conductor_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2

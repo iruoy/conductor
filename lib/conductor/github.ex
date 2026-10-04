@@ -1,157 +1,413 @@
 defmodule Conductor.GitHub do
   @moduledoc """
-  GitHub REST client with a bearer token, for a project's issues and its repository's branches and pull requests.
+  GitHub client with a bearer token: GraphQL for the issues of a GitHub Project, REST for branches and pull requests.
 
-  Issues are keyed `<project key>-<issue number>`: `SHOP-12` is `#12` in the repository of project `SHOP`. GitHub has
-  no workflow statuses, so a project's pickup, active and hand-off statuses are labels, of which an issue carries one.
-  Subtasks are sub-issues in the same repository.
+  A Conductor project points at a GitHub Project (`project_owner`, `project_number`) and reads three of its
+  single-select fields per issue: `Status` (the workflow), `Size` (the complexity of a subtask) and `Priority` (the
+  order in which issues are worked, by the order of the field's options). Subtasks are sub-issues in the same
+  repository; "blocked by" relationships are the dependencies.
 
   Configure with `config :conductor, Conductor.GitHub, token: ...` (see runtime.exs) and optionally `base_url` and
   `req_options` (tests pass `plug: {Req.Test, Conductor.GitHub}`).
   """
 
+  @item_fields """
+  fragment itemFields on ProjectV2Item {
+    id
+    project { id }
+    status: fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+    size: fieldValueByName(name: "Size") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+    priority: fieldValueByName(name: "Priority") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+  }
+  """
+
+  @issue_fields """
+  fragment issueFields on Issue {
+    number
+    title
+    body
+    state
+    url
+    repository { nameWithOwner }
+    issueType { name }
+    labels(first: 50) { nodes { name } }
+    assignees(first: 20) { nodes { login } }
+    parent { state assignees(first: 20) { nodes { login } } }
+    blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }
+  }
+  """
+
+  @meta_query """
+  query Meta($owner: String!, $number: Int!) {
+    repositoryOwner(login: $owner) {
+      ... on ProjectV2Owner {
+        projectV2(number: $number) {
+          id
+          status: field(name: "Status") { ... on ProjectV2SingleSelectField { id options { id name } } }
+          priority: field(name: "Priority") { ... on ProjectV2SingleSelectField { options { name } } }
+        }
+      }
+    }
+  }
+  """
+
+  @items_query """
+  query Items($owner: String!, $number: Int!, $cursor: String, $filter: String) {
+    repositoryOwner(login: $owner) {
+      ... on ProjectV2Owner {
+        projectV2(number: $number) {
+          items(first: 100, after: $cursor, query: $filter) {
+            pageInfo { hasNextPage endCursor }
+            nodes { ...itemFields content { ... on Issue { ...issueFields } } }
+          }
+        }
+      }
+    }
+  }
+  #{@item_fields}
+  #{@issue_fields}
+  """
+
+  @issue_query """
+  query Issue($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        ...issueFields
+        projectItems(first: 50) { nodes { ...itemFields } }
+        subIssues(first: 100) {
+          nodes { ...issueFields projectItems(first: 50) { nodes { ...itemFields } } }
+        }
+      }
+    }
+  }
+  #{@item_fields}
+  #{@issue_fields}
+  """
+
+  @item_query """
+  query Item($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) { projectItems(first: 50) { nodes { ...itemFields } } }
+    }
+  }
+  #{@item_fields}
+  """
+
+  @projects_query """
+  query Projects {
+    viewer {
+      login
+      projectsV2(first: 100) { nodes { ...projectFields } }
+      organizations(first: 100) { nodes { projectsV2(first: 100) { nodes { ...projectFields } } } }
+    }
+  }
+  fragment projectFields on ProjectV2 {
+    id
+    number
+    title
+    closed
+    owner { ... on Organization { login } ... on User { login } }
+    status: field(name: "Status") { ... on ProjectV2SingleSelectField { options { name } } }
+  }
+  """
+
+  @set_status_mutation """
+  mutation SetStatus($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+    updateProjectV2ItemFieldValue(
+      input: {projectId: $project, itemId: $item, fieldId: $field, value: {singleSelectOptionId: $option}}
+    ) {
+      projectV2Item { id }
+    }
+  }
+  """
+
   ## Issues
 
-  @doc "A project's issues matching the search `query`, as maps with `key`, `number`, `summary`, `status`, and `type`."
-  def search(project, query) do
-    with {:ok, %{"items" => items}} <-
-           request(url: "/search/issues", params: [q: query, per_page: 100]) do
-      {:ok, Enum.map(items, &summary(project, &1))}
-    end
-  end
+  @doc "The identifier of an issue's runs: `<repository name>-<issue number>`."
+  def issue_key(project, number), do: "#{project.repo.name}-#{number}"
 
-  @doc "The search query that picks up a project's issues."
-  def pickup_query(project) do
-    query =
-      Enum.join(
-        [
-          "repo:#{repo_name(project.repo)}",
-          "is:issue",
-          "is:open",
-          "assignee:#{project.runner_login}",
-          ~s(label:"#{project.pickup_label}")
-        ],
-        " "
-      )
-
-    if blank?(project.search_extra), do: query, else: "#{query} #{project.search_extra}"
-  end
-
-  @doc """
-  An issue with its subtasks, as the plain map stored in `runs.issue_snapshot`. `blocked_by` lists the keys of the
-  issues a subtask is blocked by.
-  """
-  def issue(project, key) do
-    path = issue_path(project.repo, key)
-
-    with {:ok, issue} <- request(url: path),
-         {:ok, sub_issues} <- request(url: "#{path}/sub_issues", params: [per_page: 100]) do
-      subtasks =
-        for sub <- sub_issues, same_repo?(project.repo, sub) do
-          project |> snapshot(sub) |> Map.put("blocked_by", blocked_by(project, sub))
-        end
-
-      {:ok, project |> snapshot(issue) |> Map.put("subtasks", subtasks)}
-    end
-  end
-
-  @doc """
-  Gives an issue the status label `label`, taking the project's other status labels off it. A no-op when it is
-  already there.
-  """
-  def transition(project, key, label) do
-    path = issue_path(project.repo, key)
-
-    with {:ok, issue} <- request(url: path) do
-      current = label_names(issue)
-      statuses = [project.pickup_label, project.active_label, project.handoff_label]
-
-      stale =
-        for name <- current,
-            Enum.any?(statuses, &same?(&1, name)),
-            not same?(name, label),
-            do: name
-
-      present? = Enum.any?(current, &same?(&1, label))
-
-      if present? and stale == [] do
-        {:ok, :unchanged}
-      else
-        with :ok <- remove_labels(path, stale),
-             {:ok, _} <- if(present?, do: {:ok, nil}, else: add_label(path, label)) do
-          {:ok, :transitioned}
-        end
-      end
-    end
-  end
-
-  @doc "The issue number in a key: `SHOP-12` is `12`."
+  @doc "The issue number in an issue key: `shop-12` is `12`."
   def number(key), do: key |> String.split("-") |> List.last() |> String.to_integer()
 
-  defp remove_labels(path, labels) do
-    Enum.reduce_while(labels, :ok, fn label, :ok ->
-      case request(method: :delete, url: "#{path}/labels/#{encode(label)}") do
-        {:ok, _} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
+  @doc """
+  The issues to pick up, highest priority first: open issues of the project's repository in the pickup status that
+  are assigned to the runner. Issue relationships come before priority: an issue that is blocked by an open issue
+  waits for it, and a sub-issue whose open parent is assigned to the runner is left to the parent's run.
+  """
+  def pickup(project) do
+    with {:ok, meta} <- meta(project),
+         {:ok, items} <- items(project, nil, []) do
+      issues =
+        for item <- items,
+            issue = item["content"],
+            is_map(issue) and is_integer(issue["number"]),
+            pickup?(project, item, issue),
+            do: snapshot(meta, issue, item)
 
-  defp add_label(path, label),
-    do: request(method: :post, url: "#{path}/labels", json: %{labels: [label]})
-
-  defp blocked_by(project, issue) do
-    path = "#{repo_path(project.repo)}/issues/#{issue["number"]}/dependencies/blocked_by"
-
-    case request(url: path, params: [per_page: 100]) do
-      {:ok, blockers} when is_list(blockers) ->
-        for blocker <- blockers, same_repo?(project.repo, blocker), do: key(project, blocker)
-
-      _ ->
-        []
+      {:ok, Enum.sort_by(issues, &{&1["priority_rank"], &1["number"]})}
     end
   end
 
-  defp summary(project, issue) do
-    %{
-      "key" => key(project, issue),
-      "number" => issue["number"],
-      "summary" => issue["title"],
-      "status" => issue["state"],
-      "type" => type(issue),
-      "url" => issue["html_url"]
-    }
+  defp pickup?(project, item, issue) do
+    in_repo?(project.repo, issue) and open?(issue) and
+      same?(get_in(item, ["status", "name"]), project.pickup_status) and
+      assigned?(issue, project.runner_login) and
+      not Enum.any?(nodes(issue["blockedBy"]), &open?/1) and
+      not subtask_of_runner?(project, issue["parent"])
   end
 
-  defp snapshot(project, issue) do
-    project
-    |> summary(issue)
-    |> Map.merge(%{
+  defp subtask_of_runner?(project, %{} = parent),
+    do: open?(parent) and assigned?(parent, project.runner_login)
+
+  defp subtask_of_runner?(_project, _parent), do: false
+
+  defp open?(issue), do: issue["state"] == "OPEN"
+
+  defp assigned?(issue, login),
+    do: Enum.any?(nodes(issue["assignees"]), &same?(&1["login"], login))
+
+  defp items(project, cursor, acc) do
+    variables = Map.merge(project_variables(project), %{cursor: cursor, filter: filter(project)})
+
+    with {:ok, data} <- graphql(@items_query, variables),
+         {:ok, github_project} <- project_data(project, data) do
+      page = github_project["items"]
+      acc = acc ++ nodes(page)
+
+      if page["pageInfo"]["hasNextPage"],
+        do: items(project, page["pageInfo"]["endCursor"], acc),
+        else: {:ok, acc}
+    end
+  end
+
+  defp filter(project), do: if(blank?(project.item_filter), do: nil, else: project.item_filter)
+
+  @doc """
+  An issue with its subtasks, as the plain map stored in `runs.issue_snapshot`. The subtasks are the sub-issues in
+  the same repository, highest priority first; `blocked_by` lists the keys (`#12`) of the issues one is blocked by.
+  """
+  def issue(project, number) do
+    with {:ok, meta} <- meta(project),
+         {:ok, data} <- graphql(@issue_query, repo_variables(project.repo, number)),
+         %{} = issue <- get_in(data, ["repository", "issue"]) || not_found(project, number) do
+      subtasks =
+        for sub <- nodes(issue["subIssues"]), in_repo?(project.repo, sub) do
+          snapshot(meta, sub, project_item(meta, sub))
+        end
+
+      {:ok,
+       meta
+       |> snapshot(issue, project_item(meta, issue))
+       |> Map.put("subtasks", Enum.sort_by(subtasks, & &1["priority_rank"]))}
+    end
+  end
+
+  @doc "Moves an issue to the option of the project's Status field named `status`. A no-op when it is already there."
+  def transition(project, number, status) do
+    with {:ok, meta} <- meta(project),
+         {:ok, data} <- graphql(@item_query, repo_variables(project.repo, number)),
+         %{} = issue <- get_in(data, ["repository", "issue"]) || not_found(project, number),
+         %{} = item <- project_item(meta, issue) || {:error, "##{number} is not in the project"} do
+      option = Enum.find(meta.statuses, &same?(&1["name"], status))
+
+      cond do
+        same?(get_in(item, ["status", "name"]), status) ->
+          {:ok, :unchanged}
+
+        option == nil ->
+          {:error, "#{project_name(project)} has no status #{status}"}
+
+        true ->
+          variables = %{
+            project: meta.id,
+            item: item["id"],
+            field: meta.status_field,
+            option: option["id"]
+          }
+
+          with {:ok, _} <- graphql(@set_status_mutation, variables), do: {:ok, :transitioned}
+      end
+    end
+  end
+
+  @doc """
+  What the runner's `set_issue_status` tool needs to move the issue of a run and its subtasks: the project and Status
+  field ids, the status options, and the project item of each issue number.
+  """
+  def run_context(project, snapshot) do
+    with {:ok, meta} <- meta(project) do
+      items =
+        for issue <- [snapshot | snapshot["subtasks"] || []],
+            issue["item_id"],
+            into: %{},
+            do: {to_string(issue["number"]), issue["item_id"]}
+
+      {:ok,
+       %{
+         repo: repo_name(project.repo),
+         project_id: meta.id,
+         status_field_id: meta.status_field,
+         statuses: Map.new(meta.statuses, &{&1["name"], &1["id"]}),
+         done_status: project.done_status,
+         items: items
+       }}
+    end
+  end
+
+  defp meta(project) do
+    with {:ok, data} <- graphql(@meta_query, project_variables(project)),
+         {:ok, github_project} <- project_data(project, data) do
+      case github_project["status"] do
+        %{"id" => field, "options" => statuses} ->
+          priorities =
+            for option <- get_in(github_project, ["priority", "options"]) || [],
+                do: option["name"]
+
+          {:ok,
+           %{
+             id: github_project["id"],
+             status_field: field,
+             statuses: statuses,
+             priorities: priorities
+           }}
+
+        _ ->
+          {:error, "#{project_name(project)} has no single-select Status field"}
+      end
+    end
+  end
+
+  defp project_data(project, data) do
+    case get_in(data, ["repositoryOwner", "projectV2"]) do
+      %{} = github_project -> {:ok, github_project}
+      _ -> {:error, "#{project_name(project)} was not found"}
+    end
+  end
+
+  defp snapshot(meta, issue, item) do
+    item = item || %{}
+    priority = get_in(item, ["priority", "name"])
+    repo = get_in(issue, ["repository", "nameWithOwner"])
+
+    blocked_by =
+      for blocker <- nodes(issue["blockedBy"]),
+          same?(get_in(blocker, ["repository", "nameWithOwner"]), repo),
+          do: "##{blocker["number"]}"
+
+    %{
+      "key" => "##{issue["number"]}",
+      "number" => issue["number"],
+      "summary" => issue["title"],
       "description" => issue["body"] || "",
+      "url" => issue["url"],
+      "type" => type(issue),
       "labels" => label_names(issue),
-      "blocked_by" => []
-    })
+      "status" => get_in(item, ["status", "name"]) || String.downcase(issue["state"] || ""),
+      "size" => get_in(item, ["size", "name"]),
+      "priority" => priority,
+      # The position of the priority among the field's options; issues without one come last.
+      "priority_rank" =>
+        Enum.find_index(meta.priorities, &same?(&1, priority)) || length(meta.priorities),
+      "item_id" => item["id"],
+      "blocked_by" => blocked_by
+    }
   end
 
   # The issue type when the organization uses them, else Bug for an issue with a bug label.
   defp type(issue) do
-    get_in(issue, ["type", "name"]) ||
+    get_in(issue, ["issueType", "name"]) ||
       if Enum.any?(label_names(issue), &String.contains?(String.downcase(&1), "bug")), do: "Bug"
   end
 
-  defp label_names(issue) do
-    for label <- List.wrap(issue["labels"]), do: if(is_map(label), do: label["name"], else: label)
+  defp label_names(issue), do: for(label <- nodes(issue["labels"]), do: label["name"])
+
+  defp project_item(meta, issue),
+    do: Enum.find(nodes(issue["projectItems"]), &(get_in(&1, ["project", "id"]) == meta.id))
+
+  # Sub-issues may live in other repositories, where the run has no working tree.
+  defp in_repo?(repo, issue),
+    do: same?(get_in(issue, ["repository", "nameWithOwner"]), repo_name(repo))
+
+  defp nodes(%{"nodes" => nodes}) when is_list(nodes), do: Enum.reject(nodes, &is_nil/1)
+  defp nodes(_), do: []
+
+  defp not_found(project, number),
+    do: {:error, "#{repo_name(project.repo)}##{number} was not found"}
+
+  defp project_name(project),
+    do: "GitHub project #{project.project_owner}/#{project.project_number}"
+
+  defp project_variables(project),
+    do: %{owner: project.project_owner, number: project.project_number}
+
+  defp repo_variables(repo, number), do: %{owner: repo.owner, name: repo.slug, number: number}
+
+  ## Repositories
+
+  @doc """
+  The repositories the token's account can reach that are not archived, by full name, as the attributes of a
+  `Conductor.Config.Repository` (cloned over SSH) with their `full_name`.
+  """
+  def repositories, do: repositories(1, [])
+
+  defp repositories(page, acc) do
+    params = [per_page: 100, page: page, sort: "full_name"]
+
+    with {:ok, repos} <- request(url: "/user/repos", params: params) do
+      acc =
+        acc ++
+          for repo <- repos, not repo["archived"] do
+            %{
+              "full_name" => repo["full_name"],
+              "name" => repo["name"],
+              "owner" => repo["owner"]["login"],
+              "slug" => repo["name"],
+              "clone_url" => repo["ssh_url"]
+            }
+          end
+
+      if length(repos) == 100, do: repositories(page + 1, acc), else: {:ok, acc}
+    end
   end
 
-  defp key(project, issue), do: "#{project.key}-#{issue["number"]}"
+  ## Projects
 
-  defp issue_path(repo, key), do: "#{repo_path(repo)}/issues/#{number(key)}"
+  @doc """
+  The login of the token's account and the open GitHub Projects it and its organizations own, by owner and number,
+  as the attributes of a `Conductor.Config.Project` with their `title` and the `statuses` of the Status field.
+  Organizations that do not let the token in are left out.
+  """
+  def projects do
+    case request(method: :post, url: "/graphql", json: %{query: @projects_query, variables: %{}}) do
+      {:ok, %{"data" => %{"viewer" => %{} = viewer}}} ->
+        organizations = Enum.flat_map(nodes(viewer["organizations"]), &nodes(&1["projectsV2"]))
 
-  # Sub-issues and blockers may live in other repositories, whose numbers mean nothing in this one.
-  defp same_repo?(repo, issue) do
-    case issue["repository_url"] do
-      nil -> true
-      url -> url |> String.downcase() |> String.ends_with?(String.downcase(repo_path(repo)))
+        projects =
+          for project <- Enum.uniq_by(nodes(viewer["projectsV2"]) ++ organizations, & &1["id"]),
+              not project["closed"] do
+            %{
+              "project_owner" => project["owner"]["login"],
+              "project_number" => project["number"],
+              "title" => project["title"],
+              "statuses" =>
+                for(option <- get_in(project, ["status", "options"]) || [], do: option["name"])
+            }
+          end
+
+        {:ok,
+         %{
+           login: viewer["login"],
+           projects: Enum.sort_by(projects, &{&1["project_owner"], &1["project_number"]})
+         }}
+
+      {:ok, %{"errors" => [_ | _] = errors}} ->
+        {:error, "GitHub: #{Enum.map_join(errors, "; ", & &1["message"])}"}
+
+      {:ok, body} ->
+        {:error, "GitHub: unexpected GraphQL response #{inspect(body)}"}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -190,10 +446,24 @@ defmodule Conductor.GitHub do
   defp repo_name(repo), do: "#{repo.owner}/#{repo.slug}"
   defp repo_path(repo), do: "/repos/#{repo_name(repo)}"
 
-  defp encode(segment), do: URI.encode(segment, &URI.char_unreserved?/1)
-
   defp same?(a, b), do: is_binary(a) and is_binary(b) and String.downcase(a) == String.downcase(b)
   defp blank?(value), do: value in [nil, ""] or String.trim(value) == ""
+
+  defp graphql(query, variables) do
+    case request(method: :post, url: "/graphql", json: %{query: query, variables: variables}) do
+      {:ok, %{"errors" => [_ | _] = errors}} ->
+        {:error, "GitHub: #{Enum.map_join(errors, "; ", & &1["message"])}"}
+
+      {:ok, %{"data" => data}} ->
+        {:ok, data}
+
+      {:ok, body} ->
+        {:error, "GitHub: unexpected GraphQL response #{inspect(body)}"}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   defp request(options) do
     case response(options) do

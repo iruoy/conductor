@@ -46,13 +46,13 @@ defmodule Conductor.Poller do
     {:noreply, state}
   end
 
-  @doc "Picks up every issue that matches a project's pickup query and has no open run."
+  @doc "Picks up every issue that is ready in a project and has no open run, highest priority first."
   def poll do
     for project <- Config.list_enabled_projects() do
       try do
         poll_project(project)
       rescue
-        error -> Logger.error("poller: #{project.key}: #{Exception.message(error)}")
+        error -> Logger.error("poller: #{project.repo.name}: #{Exception.message(error)}")
       end
     end
 
@@ -60,13 +60,13 @@ defmodule Conductor.Poller do
   end
 
   defp poll_project(project) do
-    case GitHub.search(project, GitHub.pickup_query(project)) do
+    case GitHub.pickup(project) do
       {:ok, issues} ->
-        keys = Enum.map(issues, & &1["key"])
-        open = MapSet.new(Runs.open_issue_keys(keys))
+        keys = Map.new(issues, &{&1["number"], GitHub.issue_key(project, &1["number"])})
+        open = MapSet.new(Runs.open_issue_keys(Map.values(keys)))
 
-        for key <- keys, key not in open do
-          with {:ok, snapshot} <- GitHub.issue(project, key),
+        for %{"number" => number} <- issues, key = keys[number], key not in open do
+          with {:ok, snapshot} <- GitHub.issue(project, number),
                {:ok, run} <- Coordinator.enqueue(project, key, snapshot) do
             Logger.info("poller: picked up #{run.id}")
           else
@@ -75,7 +75,7 @@ defmodule Conductor.Poller do
         end
 
       {:error, reason} ->
-        Logger.error("poller: #{project.key} search failed: #{reason}")
+        Logger.error("poller: #{project.repo.name} pickup failed: #{reason}")
     end
   end
 

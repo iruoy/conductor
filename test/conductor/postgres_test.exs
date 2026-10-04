@@ -15,7 +15,7 @@ defmodule Conductor.PostgresTest do
     run_fixture(project, "SHOP-1")
 
     assert {:error, changeset} = Config.delete_project(project)
-    assert errors_on(changeset) == %{key: ["has runs and cannot be deleted"]}
+    assert errors_on(changeset) == %{project_number: ["has runs and cannot be deleted"]}
   end
 
   test "event upserts replace payloads and conversations follow their first event id" do
