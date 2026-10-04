@@ -62,6 +62,7 @@ defmodule ConductorWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
+      phx-hook={@kind == :info && ".AutoDismiss"}
       role="alert"
       class="toast toast-top toast-end z-50"
       {@rest}
@@ -83,6 +84,18 @@ defmodule ConductorWeb.CoreComponents do
         </button>
       </div>
     </div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".AutoDismiss">
+      // Info messages close themselves; a new message restarts the wait.
+      export default {
+        mounted() { this.wait() },
+        updated() { this.wait() },
+        destroyed() { clearTimeout(this.timer) },
+        wait() {
+          clearTimeout(this.timer)
+          this.timer = setTimeout(() => this.el.click(), 4000)
+        }
+      }
+    </script>
     """
   end
 
