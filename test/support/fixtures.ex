@@ -71,8 +71,31 @@ defmodule Conductor.Fixtures do
 
   def run_fixture(project, key, attrs \\ %{}) do
     {:ok, run} = Runs.create_run(project, key, attrs[:issue_snapshot] || snapshot(key))
-    {:ok, run} = Runs.update_run(run, Map.delete(attrs, :issue_snapshot))
+    run = transition_run(run, Map.get(attrs, :status, :picked_up), attrs)
+    {:ok, run} = Runs.set_workspace_path(run, Map.take(attrs, [:workspace_path]))
+    {:ok, run} = Runs.set_branch(run, Map.take(attrs, [:branch]))
     run
+  end
+
+  def transition_run(run, status, attrs \\ %{}) do
+    status = if is_binary(status), do: String.to_existing_atom(status), else: status
+
+    actions =
+      case status do
+        :picked_up -> []
+        :provisioning -> [:pump]
+        :running -> [:pump, :provision_end]
+        :waiting_for_input -> [:pump, :provision_end, :wait_for_input]
+        :handing_off -> [:pump, :settle]
+        :completed -> [:pump, :settle, :complete]
+        :failed -> [:fail]
+      end
+
+    Enum.reduce(actions, run, fn action, run ->
+      accepted = Ash.Resource.Info.action(Conductor.Runs.Run, action).accept
+      {:ok, run} = apply(Runs, action, [run, Map.take(attrs, accepted)])
+      run
+    end)
   end
 
   @doc "A bare repository with `main` (and `staging` unless `staging: false`) to clone from."

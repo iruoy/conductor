@@ -57,7 +57,7 @@ defmodule ConductorWeb.DashboardLive do
               <td>
                 <.status_badge status={run.status} />
                 <div
-                  :if={run.status == "failed" && run.error}
+                  :if={run.status == :failed && run.error}
                   class="mt-1 max-w-xs truncate text-xs text-error"
                 >
                   {run.error}
@@ -94,7 +94,7 @@ defmodule ConductorWeb.DashboardLive do
                   Retry
                 </button>
                 <button
-                  :if={not Conductor.Runs.Run.terminal?(run) and run.status != "handing_off"}
+                  :if={not Conductor.Runs.Run.terminal?(run) and run.status != :handing_off}
                   id={"abort-#{run.id}"}
                   phx-click={show_modal("confirm-abort-#{run.id}")}
                   class="btn btn-ghost btn-xs text-error"
@@ -102,7 +102,7 @@ defmodule ConductorWeb.DashboardLive do
                   Abort
                 </button>
                 <.confirm_modal
-                  :if={not Conductor.Runs.Run.terminal?(run) and run.status != "handing_off"}
+                  :if={not Conductor.Runs.Run.terminal?(run) and run.status != :handing_off}
                   id={"confirm-abort-#{run.id}"}
                   title={"Abort #{run.id}?"}
                   confirm="Abort"
@@ -233,7 +233,7 @@ defmodule ConductorWeb.DashboardLive do
   end
 
   # A run inserted for the first time goes to the top; updates keep their place.
-  defp new_run?(_socket, run), do: run.inserted_at == run.updated_at and run.status == "picked_up"
+  defp new_run?(_socket, run), do: run.inserted_at == run.updated_at and run.status == :picked_up
 
   defp format_time(nil), do: ""
   defp format_time(datetime), do: Calendar.strftime(datetime, "%d %b %H:%M")

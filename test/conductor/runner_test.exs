@@ -15,7 +15,7 @@ defmodule Conductor.RunnerTest do
   end
 
   test "ingests events and forwards lifecycle events" do
-    run = run_fixture(project_fixture(), "SHOP-1", %{status: "running"})
+    run = run_fixture(project_fixture(), "SHOP-1", %{status: :running})
     assert_receive {:runner, %{"type" => "ready"}}, 5_000
 
     assert {:ok, %{"status" => "running"}} =

@@ -86,7 +86,7 @@ defmodule Conductor.RunsTest do
     {:ok, first} = Runs.create_run(project, "SHOP-1", %{"priority_rank" => 2})
     assert first.id == "SHOP-1-1"
     assert first.attempt == 1
-    assert first.status == "picked_up"
+    assert first.status == :picked_up
     assert_receive {:run_updated, %{id: "SHOP-1-1", project: %{id: project_id}}}
     assert project_id == project.id
     assert_receive {:run_updated, %{id: "SHOP-1-1", project: %{id: ^project_id}}}
@@ -99,15 +99,15 @@ defmodule Conductor.RunsTest do
     assert Runs.get_run!(first.id).project.repo.id == project.repo.id
     assert Runs.get_run("missing") == nil
     assert_raise Ash.Error.Invalid, fn -> Runs.get_run!("missing") end
-    assert {:error, %Ecto.Changeset{}} = Runs.update_run(first, %{status: "unknown"})
-    assert Runs.get_run!(first.id).status == "picked_up"
-    assert {:ok, updated} = Runs.update_run(first, %{status: "completed", summary: "done\n"})
+    assert {:error, %Ash.Error.Invalid{}} = Runs.complete(first)
+    assert Runs.get_run!(first.id).status == :picked_up
+    updated = transition_run(first, :completed, %{summary: "done\n"})
     assert updated.summary == "done\n"
     assert Conductor.Runs.Run.terminal?(updated)
-    assert Conductor.Runs.Run.terminal_statuses() == ~w(completed failed)
-    assert is_binary(updated.status)
+    assert Conductor.Runs.Run.terminal_statuses() == ~w(completed failed)a
+    assert is_atom(updated.status)
     assert Runs.open_issue_keys(["SHOP-1", "SHOP-2"]) == ["SHOP-1"]
-    assert [queued] = Runs.list_by_status(["picked_up"])
+    assert [queued] = Runs.list_by_status([:picked_up])
     assert queued.id == second.id
     assert queued.project.repo.id == project.repo.id
   end
@@ -129,13 +129,14 @@ defmodule Conductor.RunsTest do
     assert Runs.active_count() == 0
 
     for {run, status} <- [{missing, "provisioning"}, {low, "running"}, {high, "handing_off"}] do
-      assert {:ok, _} = Runs.update_run(run, %{status: status})
+      transition_run(run, status)
     end
 
     assert Runs.active_count() == 3
-    {:ok, _} = Runs.update_run(low, %{status: "waiting_for_input"})
+    {:ok, _} = Runs.wait_for_input(Runs.get_run!(low.id))
     assert Runs.active_count() == 2
-    {:ok, _} = Runs.update_run(high, %{status: "failed", workspace_path: "/tmp/old"})
+    {:ok, _} = Runs.fail(Runs.get_run!(high.id))
+    {:ok, _} = Runs.set_workspace_path(Runs.get_run!(high.id), %{workspace_path: "/tmp/old"})
 
     Repo.update_all(from(r in Conductor.Runs.Run, where: r.id == ^high.id),
       set: [updated_at: old]
@@ -191,6 +192,47 @@ defmodule Conductor.RunsTest do
              })
 
     refute_receive {:question, _}
+  end
+
+  test "illegal lifecycle transitions and unknown inputs are rejected" do
+    project = project_fixture()
+    queued = run_fixture(project, "SHOP-20")
+    assert {:error, %Ash.Error.Invalid{}} = Runs.complete(queued, %{pr_url: "wrong"})
+    assert Runs.get_run!(queued.id).status == :picked_up
+    assert {:error, %Ash.Error.Invalid{}} = Runs.pump(queued, %{summary: "not accepted"})
+
+    completed = transition_run(queued, :completed)
+    assert {:error, %Ash.Error.Invalid{}} = Runs.resume(completed)
+    assert {:error, %Ash.Error.Invalid{}} = Runs.provision_end(completed)
+    assert {:error, %Ash.Error.Invalid{}} = Runs.fail(completed, %{error: "late failure"})
+    assert Runs.get_run!(queued.id).status == :completed
+  end
+
+  test "stale structs cannot overwrite the persisted terminal state" do
+    run = run_fixture(project_fixture(), "SHOP-21", %{status: :running})
+    {:ok, settled} = Runs.settle(run, %{outcome: "completed"})
+    {:ok, _} = Runs.complete(settled)
+    assert {:error, %Ash.Error.Invalid{}} = Runs.wait_for_input(run)
+    assert {:error, %Ash.Error.Invalid{}} = Runs.fail(run, %{error: "late failure"})
+    assert Runs.get_run!(run.id).status == :completed
+  end
+
+  test "duplicate and stale run_state events are quietly ignored" do
+    run = run_fixture(project_fixture(), "SHOP-22", %{status: :running})
+    Runs.subscribe(run.id)
+    event = %{"type" => "run_state", "run_id" => run.id, "status" => "running"}
+    assert :ok = Runs.ingest(event)
+    refute_received {:run_updated, _}
+    assert :ok = Runs.ingest(%{event | "status" => "waiting_for_input"})
+    assert_receive {:run_updated, %{status: :waiting_for_input}}
+    assert :ok = Runs.ingest(%{event | "status" => "waiting_for_input"})
+    refute_received {:run_updated, _}
+    {:ok, failed} = Runs.fail(Runs.get_run!(run.id), %{error: "original"})
+    assert_receive {:run_updated, %{status: :failed}}
+    assert :ok = Runs.ingest(event)
+    assert :ok = Runs.ingest(%{event | "run_id" => "missing"})
+    assert Runs.get_run!(run.id).error == failed.error
+    refute_received {:run_updated, _}
   end
 
   defp ingest(run, event) do

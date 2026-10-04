@@ -17,21 +17,21 @@ defmodule ConductorWeb.RunLiveTest do
 
   test "shows the transcript and sends answers to the runner", %{conn: conn, project: project} do
     {:ok, _} = Coordinator.enqueue(project, "shop-2", snapshot("shop-2", "Ask [fake:ask]"))
-    assert_receive {:run_updated, %{id: "shop-2-1", status: "waiting_for_input"}}, 10_000
+    assert_receive {:run_updated, %{id: "shop-2-1", status: :waiting_for_input}}, 10_000
 
     {:ok, view, html} = live(conn, ~p"/runs/shop-2-1")
     assert html =~ "<h1>#2: Ask [fake:ask]</h1>"
     assert html =~ "Which way?"
 
     view |> form("#answer-q1", %{"text" => "left"}) |> render_submit()
-    assert_receive {:run_updated, %{id: "shop-2-1", status: "completed"}}, 5_000
+    assert_receive {:run_updated, %{id: "shop-2-1", status: :completed}}, 5_000
     eventually(fn -> assert render(view) =~ "Did it." end)
     refute render(view) =~ "Which way?"
     assert [%{answer: "left"}] = Runs.list_questions("shop-2-1")
   end
 
   test "streams live text and tool output", %{conn: conn, project: project} do
-    run = run_fixture(project, "shop-3", %{status: "running"})
+    run = run_fixture(project, "shop-3", %{status: :running})
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
 
     send_event = fn event ->

@@ -19,7 +19,7 @@ defmodule Conductor.Runs do
   end
 
   @pubsub Conductor.PubSub
-  @active ~w(provisioning running handing_off)
+  @active ~w(provisioning running handing_off)a
 
   def subscribe, do: Phoenix.PubSub.subscribe(@pubsub, "runs")
   def subscribe(run_id), do: Phoenix.PubSub.subscribe(@pubsub, "run:" <> run_id)
@@ -53,7 +53,7 @@ defmodule Conductor.Runs do
 
   def next_queued do
     Run
-    |> Ash.Query.filter(status == "picked_up")
+    |> Ash.Query.filter(status == :picked_up)
     |> Ash.Query.sort([:inserted_at, :id])
     |> Ash.read!()
     |> Enum.min_by(&priority_rank/1, fn -> nil end)
@@ -83,31 +83,39 @@ defmodule Conductor.Runs do
       issue_key: issue_key,
       attempt: attempt,
       project_id: project.id,
-      status: "picked_up",
       issue_snapshot: snapshot
     })
     |> persist(:create)
     |> tap_ok(&broadcast/1)
   end
 
-  def update_run(%Run{} = run, attrs) do
+  for action <- [
+        :pump,
+        :provision_end,
+        :wait_for_input,
+        :resume,
+        :settle,
+        :complete,
+        :hand_off_failed,
+        :abort,
+        :fail,
+        :set_workspace_path,
+        :set_branch,
+        :clear_workspace
+      ] do
+    def unquote(action)(%Run{} = run, attrs \\ %{}) do
+      update_action(run, unquote(action), attrs)
+    end
+  end
+
+  defp update_action(run, action, attrs) do
     run
-    |> Ash.Changeset.for_update(:update, attrs, skip_unknown_inputs: [:*])
+    |> Ash.Changeset.for_update(action, attrs)
     |> persist(:update)
     |> tap_ok(&broadcast/1)
   end
 
-  # Keep the existing context error contract while Ash owns validation/persistence.
-  defp persist(changeset, action) do
-    case apply(Ash, action, [changeset]) do
-      {:ok, record} ->
-        {:ok, record}
-
-      {:error, error} ->
-        {:error,
-         Conductor.Config.FormAdapter.changeset(changeset, Ash.Error.to_error_class(error).errors)}
-    end
-  end
+  defp persist(changeset, action), do: apply(Ash, action, [changeset])
 
   @doc "Terminal runs whose workspace is older than `days`."
   def list_prunable(days) do
@@ -176,13 +184,17 @@ defmodule Conductor.Runs do
   def ingest(%{"type" => "run_state", "run_id" => run_id, "status" => status})
       when status in ~w(running waiting_for_input) do
     case Ash.get!(Run, run_id, not_found_error?: false) do
-      %Run{status: current} = run
-      when current in ~w(running waiting_for_input) and current != status ->
-        update_run(run, %{status: status})
+      %Run{} = run ->
+        case status do
+          "running" -> resume(run)
+          "waiting_for_input" -> wait_for_input(run)
+        end
 
-      _ ->
+      nil ->
         :ok
     end
+
+    :ok
   end
 
   def ingest(_event), do: :ok

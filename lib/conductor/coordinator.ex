@@ -65,7 +65,7 @@ defmodule Conductor.Coordinator do
 
     state =
       Enum.reduce(
-        Runs.list_by_status(~w(provisioning running waiting_for_input handing_off)),
+        Runs.list_by_status(~w(provisioning running waiting_for_input handing_off)a),
         state,
         fn run, state ->
           reconcile(run, known[run.id], state)
@@ -100,14 +100,14 @@ defmodule Conductor.Coordinator do
 
     result =
       case run.status do
-        status when status in ~w(picked_up provisioning) ->
-          Runs.update_run(run, %{status: "failed", error: "aborted"})
+        status when status in ~w(picked_up provisioning)a ->
+          Runs.abort(run)
 
-        status when status in ~w(running waiting_for_input) ->
+        status when status in ~w(running waiting_for_input)a ->
           # The runner settles the run as failed; the hand-off then marks it so.
           with {:error, reason} <- Runner.call(%{type: "abort", run_id: run_id}) do
             Logger.warning("coordinator: runner abort of #{run_id} failed: #{inspect(reason)}")
-            Runs.update_run(run, %{status: "failed", error: "aborted"})
+            Runs.abort(run)
           end
 
         _ ->
@@ -123,8 +123,8 @@ defmodule Conductor.Coordinator do
   @impl true
   def handle_info({:runner, %{"type" => "run_settled", "run_id" => run_id} = settled}, state) do
     case Runs.get_run(run_id) do
-      %Run{status: status} = run when status in ~w(provisioning running waiting_for_input) ->
-        {:noreply, run |> settle(settled) |> start_handoff(state)}
+      %Run{} = run ->
+        {:noreply, settle(run, settled, state)}
 
       _ ->
         {:noreply, state}
@@ -157,34 +157,33 @@ defmodule Conductor.Coordinator do
 
   ## Lifecycle
 
-  defp reconcile(%Run{status: "provisioning"} = run, _known, state),
+  defp reconcile(%Run{status: :provisioning} = run, _known, state),
     do: start_provision(run, state)
 
-  defp reconcile(%Run{status: "handing_off"} = run, _known, state), do: start_handoff(run, state)
+  defp reconcile(%Run{status: :handing_off} = run, _known, state), do: start_handoff(run, state)
 
   # Running or waiting, but the runner never got (or lost) the run: provision again, which re-sends start_run.
   defp reconcile(run, nil, state), do: start_provision(run, state)
 
   defp reconcile(run, %{"status" => "settled", "settled" => settled}, state) do
-    run |> settle(settled) |> start_handoff(state)
+    settle(run, settled, state)
   end
 
   defp reconcile(run, %{"status" => status} = known, state) do
     Runs.sync_questions(run.id, known["questions"] || [])
-    if run.status != status, do: Runs.update_run(run, %{status: status})
+    Runs.ingest(%{"type" => "run_state", "run_id" => run.id, "status" => status})
     state
   end
 
-  defp settle(run, settled) do
-    {:ok, run} =
-      Runs.update_run(run, %{
-        status: "handing_off",
-        outcome: settled["outcome"],
-        summary: settled["summary"],
-        error: settled["error"]
-      })
-
-    run
+  defp settle(run, settled, state) do
+    case Runs.settle(run, %{
+           outcome: settled["outcome"],
+           summary: settled["summary"],
+           error: settled["error"]
+         }) do
+      {:ok, run} -> start_handoff(run, state)
+      {:error, _} -> state
+    end
   end
 
   defp pump(state) do
@@ -196,8 +195,10 @@ defmodule Conductor.Coordinator do
           state
 
         run ->
-          {:ok, run} = Runs.update_run(run, %{status: "provisioning"})
-          pump(start_provision(run, state))
+          case Runs.pump(run) do
+            {:ok, run} -> pump(start_provision(run, state))
+            {:error, _} -> state
+          end
       end
     else
       state
@@ -225,7 +226,7 @@ defmodule Conductor.Coordinator do
 
     case Runs.get_run(run_id) do
       %Run{} = run ->
-        unless Run.terminal?(run), do: Runs.update_run(run, %{status: "failed", error: message})
+        Runs.fail(run, %{error: message})
 
       nil ->
         :ok
@@ -245,7 +246,8 @@ defmodule Conductor.Coordinator do
     with {:ok, _} <- GitHub.transition(project, number, project.active_status),
          {:ok, github} <- GitHub.run_context(project, run.issue_snapshot),
          {:ok, ws} <- Workspace.provision(repo, Integer.to_string(number), run.issue_snapshot),
-         {:ok, run} <- Runs.update_run(run, %{workspace_path: ws.path, branch: ws.branch}),
+         {:ok, run} <- Runs.set_workspace_path(run, %{workspace_path: ws.path}),
+         {:ok, run} <- Runs.set_branch(run, %{branch: ws.branch}),
          :ok <- record_setup(run, ws.setup_output),
          models when is_map(models) <-
            Config.run_models(Config.get_settings()) || {:error, "no head model configured"},
@@ -258,10 +260,12 @@ defmodule Conductor.Coordinator do
            models: models,
            github: github
          },
+         # Setup is complete before start_run can emit events. Its reply and first
+         # run_state can arrive together, so advancing after the reply loses input events.
+         _ <- Runs.provision_end(Runs.get_run!(run_id)),
          {:ok, _} <- Runner.call(command) do
       case Runs.get_run!(run_id) do
-        %Run{status: "failed"} -> Runner.call(%{type: "abort", run_id: run_id})
-        %Run{status: "provisioning"} = run -> Runs.update_run(run, %{status: "running"})
+        %Run{status: :failed} -> Runner.call(%{type: "abort", run_id: run_id})
         _ -> :ok
       end
 
@@ -284,7 +288,7 @@ defmodule Conductor.Coordinator do
              {:ok, url} <-
                GitHub.find_or_create_pr(repo, run.branch, base, title, pr_description(run)),
              {:ok, _} <- GitHub.transition(run.project, number, run.project.handoff_status) do
-          {:ok, _} = Runs.update_run(run, %{status: "completed", pr_url: url})
+          Runs.complete(run, %{pr_url: url})
           :ok
         else
           {:ok, false} -> {:error, "the agent finished, but branch #{run.branch} was not pushed"}
@@ -292,7 +296,7 @@ defmodule Conductor.Coordinator do
         end
 
       _ ->
-        {:ok, _} = Runs.update_run(run, %{status: "failed", error: run.error || "the run failed"})
+        Runs.hand_off_failed(run, %{error: run.error || "the run failed"})
         :ok
     end
   end

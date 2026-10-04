@@ -35,7 +35,7 @@ defmodule ConductorWeb.RunLive do
         <:actions>
           <button :if={Run.terminal?(@run)} id="retry" phx-click="retry" class="btn btn-sm">Retry</button>
           <button
-            :if={not Run.terminal?(@run) and @run.status != "handing_off"}
+            :if={not Run.terminal?(@run) and @run.status != :handing_off}
             id="abort"
             phx-click={show_modal("confirm-abort")}
             class="btn btn-sm btn-error btn-outline"
@@ -43,7 +43,7 @@ defmodule ConductorWeb.RunLive do
             Abort
           </button>
           <.confirm_modal
-            :if={not Run.terminal?(@run) and @run.status != "handing_off"}
+            :if={not Run.terminal?(@run) and @run.status != :handing_off}
             id="confirm-abort"
             title="Abort this run?"
             confirm="Abort"
@@ -54,7 +54,7 @@ defmodule ConductorWeb.RunLive do
         </:actions>
       </.header>
 
-      <div :if={@run.status == "failed" && @run.error} class="alert alert-error text-sm">
+      <div :if={@run.status == :failed && @run.error} class="alert alert-error text-sm">
         <.icon name="hero-exclamation-triangle" class="size-5" />
         <span class="whitespace-pre-wrap">{@run.error}</span>
       </div>
