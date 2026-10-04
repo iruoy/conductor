@@ -5,7 +5,7 @@ defmodule Conductor.Repo.Migrations.Init do
     create table(:repos) do
       add :name, :string, null: false
       add :clone_url, :string, null: false
-      add :bitbucket_workspace, :string, null: false
+      add :owner, :string, null: false
       add :slug, :string, null: false
       add :base_branch, :string
       add :setup_script, :text
@@ -16,18 +16,20 @@ defmodule Conductor.Repo.Migrations.Init do
     create unique_index(:repos, [:name])
 
     create table(:projects) do
-      add :jira_key, :string, null: false
-      add :runner_account_id, :string, null: false
+      add :project_owner, :string, null: false
+      add :project_number, :integer, null: false, default: 0
+      add :runner_login, :string, null: false
       add :pickup_status, :string, null: false
       add :active_status, :string, null: false
       add :handoff_status, :string, null: false
-      add :jql_extra, :string
+      add :done_status, :string, null: false, default: "Done"
+      add :item_filter, :string
       add :enabled, :boolean, null: false, default: true
       add :repo_id, references(:repos, on_delete: :restrict), null: false
       timestamps(type: :utc_datetime)
     end
 
-    create unique_index(:projects, [:jira_key])
+    create unique_index(:projects, [:repo_id, :project_owner, :project_number])
 
     create table(:settings) do
       add :models, :map, null: false, default: %{}

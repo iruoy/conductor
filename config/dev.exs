@@ -1,9 +1,19 @@
 import Config
 
+# Postgrex requires socket_dir rather than hostname for Unix-socket connections.
+pg_host = System.get_env("PGHOST") || "localhost"
+
+config :conductor,
+       Conductor.Repo,
+       if(Path.type(pg_host) == :absolute, do: [socket_dir: pg_host], else: [hostname: pg_host])
+
 # Configure your database
 config :conductor, Conductor.Repo,
-  database: Path.expand("../conductor_dev.db", __DIR__),
-  pool_size: 5,
+  username: System.get_env("PGUSER") || "postgres",
+  password: System.get_env("PGPASSWORD") || "postgres",
+  port: String.to_integer(System.get_env("PGPORT") || "5432"),
+  database: "conductor_dev",
+  pool_size: 10,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 

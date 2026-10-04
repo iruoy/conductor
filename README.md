@@ -2,7 +2,7 @@
 
 Picks GitHub issues assigned to a runner account, works them with a durable coding agent in a git working tree, and
 opens a pull request when the agent is done. Phoenix LiveView for the UI, a Node
-[pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable) runner for the agent, SQLite for both.
+[pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable) runner for the agent, and PostgreSQL for Conductor's application data.
 
 ```
 Poller ─search─▶ Coordinator ──provision──▶ Workspace (mirror → clone → issue branch)
@@ -11,10 +11,14 @@ Poller ─search─▶ Coordinator ──provision──▶ Workspace (mirror �
               Runner (Port) ◀──JSON lines──▶ runner/dist/main.js (pi-durable, durable.sqlite)
                     │ events
                     ▼
-               Runs (SQLite, PubSub) ──▶ LiveViews: / (runs), /runs/:id (transcript, questions), /config
+               Runs (Postgres, PubSub) ──▶ LiveViews: / (runs), /runs/:id (transcript, questions), /config
 ```
 
 ## Setup
+
+Start PostgreSQL before setup. By default, Conductor connects as `postgres` with password `postgres` on
+`localhost:5432` (override with `PGUSER`, `PGPASSWORD`, `PGHOST`, and `PGPORT`). For example, to use a local PostgreSQL Unix
+socket, set `PGHOST=/run/postgresql`.
 
 ```sh
 cd runner && pnpm install && pnpm build && cd ..
@@ -31,6 +35,7 @@ Environment:
 | Variable | Used for |
 |---|---|
 | `GITHUB_TOKEN` | Reading the project and its issues, moving issues between statuses, checking the pushed branch and opening the PR (Phoenix), and the agent's `set_issue_status` tool. Needs read/write on projects, issues and pull requests (a classic token: `repo` and `project`) |
+| `DATABASE_URL` | PostgreSQL connection URL in production |
 | `CONDUCTOR_WORKSPACES` | Workspace root, default `~/conductor-workspaces` |
 | `CONDUCTOR_RUNNER_DATA` | Runner state directory, default `runner/data` |
 | `PI_AUTH_PATH` | pi credentials file, default `~/.pi/agent/auth.json` |
