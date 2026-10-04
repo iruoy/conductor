@@ -83,38 +83,66 @@ defmodule ConductorWeb.RunComponents do
   """
   def chat_message(assigns) do
     ~H"""
-    <div class={["flex items-start gap-3", @from == "input" && "flex-row-reverse"]}>
-      <div class={[
-        "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full",
-        if(@from == "agent",
-          do: "bg-primary/15 text-primary",
-          else: "bg-base-300 text-base-content/70"
-        )
-      ]}>
-        <.icon
-          name={if @from == "agent", do: "hero-sparkles-micro", else: "hero-user-micro"}
-          class="size-4"
-        />
-      </div>
-      <div class={[
-        "min-w-0 flex-1 rounded-box px-4 py-3",
-        if(@from == "agent",
-          do: "rounded-tl-none bg-primary/10",
-          else: "rounded-tr-none bg-base-200"
-        )
-      ]}>
+    <div class={["chat", if(@from == "agent", do: "chat-start", else: "chat-end")]}>
+      <div class="chat-image avatar avatar-placeholder">
         <div class={[
-          "mb-1 text-xs font-semibold uppercase tracking-wide",
-          if(@from == "agent", do: "text-primary/80", else: "text-base-content/60")
+          "w-7 rounded-full",
+          if(@from == "agent",
+            do: "bg-primary text-primary-content",
+            else: "bg-neutral text-neutral-content"
+          )
         ]}>
-          {@from}
+          <.icon
+            name={if @from == "agent", do: "hero-sparkles-micro", else: "hero-user-micro"}
+            class="size-4"
+          />
         </div>
-        <div class="whitespace-pre-wrap break-words text-sm leading-relaxed" phx-no-format>{String.trim(@text)}<span
-          :if={@streaming}
-          class="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle"
-        ></span></div>
+      </div>
+      <div class="chat-header capitalize">{@from}</div>
+      <div class="chat-bubble prose prose-sm max-w-[90%]">
+        {markdown(@text)}
+        <span :if={@streaming} class="loading loading-dots loading-xs"></span>
       </div>
     </div>
+    """
+  end
+
+  attr :id, :string, default: nil
+  attr :class, :any, default: "border-base-300"
+  attr :open, :boolean, default: false, doc: "always open, as for a tool that is still running"
+  slot :title, required: true
+  slot :inner_block
+
+  @doc "A row of the transcript that opens to show more: a tool call and its result, a note, the thinking."
+  def fold(%{inner_block: []} = assigns) do
+    ~H"""
+    <div class={["collapse ml-10 w-auto border", @class]}>
+      <div class="collapse-title flex min-h-0 items-start gap-2 px-3 py-2 font-mono text-xs">
+        {render_slot(@title)}
+      </div>
+    </div>
+    """
+  end
+
+  def fold(%{open: true} = assigns) do
+    ~H"""
+    <div id={@id} class={["collapse collapse-open ml-10 w-auto border", @class]}>
+      <div class="collapse-title flex min-h-0 items-start gap-2 px-3 py-2 font-mono text-xs">
+        {render_slot(@title)}
+      </div>
+      <div class="collapse-content min-w-0 px-3 text-xs">{render_slot(@inner_block)}</div>
+    </div>
+    """
+  end
+
+  def fold(assigns) do
+    ~H"""
+    <details class={["collapse collapse-arrow ml-10 w-auto border", @class]}>
+      <summary class="collapse-title flex min-h-0 items-start gap-2 py-2 ps-3 font-mono text-xs after:top-4!">
+        {render_slot(@title)}
+      </summary>
+      <div class="collapse-content min-w-0 px-3 text-xs">{render_slot(@inner_block)}</div>
+    </details>
     """
   end
 
@@ -140,13 +168,10 @@ defmodule ConductorWeb.RunComponents do
               text={block["text"]}
             />
           <% "thinking" -> %>
-            <details
-              :if={block["thinking"] not in [nil, ""]}
-              class="ml-10 text-xs text-base-content/60"
-            >
-              <summary class="cursor-pointer">thinking</summary>
-              <div class="mt-1 whitespace-pre-wrap">{block["thinking"]}</div>
-            </details>
+            <.fold :if={block["thinking"] not in [nil, ""]}>
+              <:title><span class="text-base-content/60">thinking</span></:title>
+              <div class="whitespace-pre-wrap text-base-content/60">{block["thinking"]}</div>
+            </.fold>
           <% "toolCall" -> %>
             <.tool_call block={block} result={@item.results[block["id"]]} />
           <% _ -> %>
@@ -161,24 +186,19 @@ defmodule ConductorWeb.RunComponents do
 
   def transcript_item(%{item: %{kind: "pi.tool-result"}} = assigns) do
     ~H"""
-    <details class={[
-      "ml-10 rounded-box border px-3 py-2 text-xs",
-      if(message(@item.payload)["isError"], do: "border-error/40", else: "border-base-300")
-    ]}>
-      <summary class="cursor-pointer font-mono text-base-content/70">
-        {message(@item.payload)["toolName"]} result
-      </summary>
-      <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all">{truncate(message_text(@item.payload), 8000)}</pre>
-    </details>
+    <.fold class={result_border(@item.payload)}>
+      <:title>{message(@item.payload)["toolName"]} result</:title>
+      <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-all">{truncate(message_text(@item.payload), 8000)}</pre>
+    </.fold>
     """
   end
 
   def transcript_item(%{item: %{kind: "conductor.note"}} = assigns) do
     ~H"""
-    <details class="ml-10 rounded-box border border-base-300 px-3 py-2 text-xs">
-      <summary class="cursor-pointer font-semibold">{@item.payload["title"]}</summary>
-      <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap">{truncate(@item.payload["text"], 8000)}</pre>
-    </details>
+    <.fold>
+      <:title><span class="font-sans font-semibold">{@item.payload["title"]}</span></:title>
+      <pre class="max-h-96 overflow-auto whitespace-pre-wrap">{truncate(@item.payload["text"], 8000)}</pre>
+    </.fold>
     """
   end
 
@@ -200,32 +220,48 @@ defmodule ConductorWeb.RunComponents do
   # A tool call; once its result is in, it opens to show it.
   defp tool_call(%{result: nil} = assigns) do
     ~H"""
-    <div class="ml-10 flex items-start gap-2 rounded-box border border-base-300 px-3 py-2 font-mono text-xs text-base-content/80">
-      <.icon name="hero-wrench-screwdriver-micro" class="mt-0.5 size-3.5 shrink-0 text-primary" />
-      <span class="font-semibold">{@block["name"]}</span>
-      <span class="line-clamp-3 break-all">{tool_args(@block["arguments"])}</span>
-    </div>
+    <.fold>
+      <:title><.tool_title name={@block["name"]} args={@block["arguments"]} /></:title>
+    </.fold>
     """
   end
 
   defp tool_call(assigns) do
     ~H"""
-    <details class={[
-      "group ml-10 rounded-box border px-3 py-2 text-xs",
-      if(message(@result)["isError"], do: "border-error/40", else: "border-base-300")
-    ]}>
-      <summary class="flex cursor-pointer list-none items-start gap-2 font-mono text-base-content/80">
-        <.icon name="hero-wrench-screwdriver-micro" class="mt-0.5 size-3.5 shrink-0 text-primary" />
-        <span class="font-semibold">{@block["name"]}</span>
-        <span class="line-clamp-3 grow break-all">{tool_args(@block["arguments"])}</span>
-        <.icon
-          name="hero-chevron-right-micro"
-          class="mt-0.5 size-3.5 shrink-0 text-base-content/50 transition-transform group-open:rotate-90"
-        />
-      </summary>
-      <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all">{truncate(message_text(@result), 8000)}</pre>
-    </details>
+    <.fold class={result_border(@result)}>
+      <:title><.tool_title name={@block["name"]} args={@block["arguments"]} /></:title>
+      <pre class="max-h-96 overflow-auto whitespace-pre-wrap break-all">{truncate(message_text(@result), 8000)}</pre>
+    </.fold>
     """
+  end
+
+  attr :name, :string, required: true
+  attr :args, :any, required: true
+
+  defp tool_title(assigns) do
+    ~H"""
+    <.icon name="hero-wrench-screwdriver-micro" class="mt-0.5 size-3.5 shrink-0 text-primary" />
+    <span class="font-semibold">{@name}</span>
+    <span class="line-clamp-3 break-all text-base-content/80">{tool_args(@args)}</span>
+    """
+  end
+
+  defp result_border(payload),
+    do: if(message(payload)["isError"], do: "border-error/40", else: "border-base-300")
+
+  @doc """
+  Renders Markdown as HTML that is safe to show: the text comes from issues and from the agent, so HTML in it is
+  shown as text and what is left is sanitized. A line break in the text stays a line break.
+  """
+  def markdown(text) do
+    text
+    |> MDEx.to_html!(
+      extension: [strikethrough: true, table: true, autolink: true, tasklist: true],
+      render: [hardbreaks: true, escape: true],
+      syntax_highlight: nil,
+      sanitize: MDEx.Document.default_sanitize_options()
+    )
+    |> Phoenix.HTML.raw()
   end
 
   defp message(payload), do: List.first(payload["model"] || []) || %{}

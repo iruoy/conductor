@@ -54,21 +54,25 @@ defmodule ConductorWeb.RunLive do
       <section
         :for={q <- @open_questions}
         id={"question-#{q.qid}"}
-        class="rounded-box border border-warning p-4"
+        class="card card-border card-sm border-warning"
       >
-        <div class="mb-2 flex items-center gap-2 text-sm font-semibold text-warning">
-          <.icon name="hero-chat-bubble-left-ellipsis" class="size-5" /> The agent asks
+        <div class="card-body">
+          <h2 class="card-title text-sm text-warning">
+            <.icon name="hero-chat-bubble-left-ellipsis" class="size-5" /> The agent asks
+          </h2>
+          <p class="whitespace-pre-wrap text-sm">{q.text}</p>
+          <.form
+            for={to_form(%{"qid" => q.qid, "text" => ""})}
+            id={"answer-#{q.qid}"}
+            phx-submit="answer"
+          >
+            <input type="hidden" name="qid" value={q.qid} />
+            <.input type="textarea" name="text" value="" placeholder="Your answer" required />
+            <div class="card-actions">
+              <.button variant="primary" phx-disable-with="Sending…">Send answer</.button>
+            </div>
+          </.form>
         </div>
-        <p class="mb-3 whitespace-pre-wrap text-sm">{q.text}</p>
-        <.form
-          for={to_form(%{"qid" => q.qid, "text" => ""})}
-          id={"answer-#{q.qid}"}
-          phx-submit="answer"
-        >
-          <input type="hidden" name="qid" value={q.qid} />
-          <.input type="textarea" name="text" value="" placeholder="Your answer" required />
-          <.button variant="primary" phx-disable-with="Sending…">Send answer</.button>
-        </.form>
       </section>
 
       <div :if={@conversations != []} role="tablist" class="tabs tabs-border" id="conversations">
@@ -98,21 +102,22 @@ defmodule ConductorWeb.RunLive do
 
       <div :if={@live_text != "" or @live_tools != %{}} id="live" class="space-y-2">
         <.chat_message :if={@live_text != ""} from="agent" text={@live_text} streaming />
-        <div
+        <.fold
           :for={{call_id, tool} <- @live_tools}
           id={"live-tool-#{call_id}"}
-          class="ml-10 rounded-box border border-info/40 px-3 py-2 text-xs"
+          class="border-info/40"
+          open
         >
-          <div class="flex items-center gap-2 font-mono">
+          <:title>
             <span class="loading loading-spinner loading-xs text-info"></span>
             <span class="font-semibold">{tool.name}</span>
             <span class="truncate text-base-content/70">{tool_args(tool.args)}</span>
-          </div>
+          </:title>
           <pre
             :if={tool.output != ""}
-            class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all"
+            class="max-h-64 overflow-auto whitespace-pre-wrap break-all"
           >{tool.output}</pre>
-        </div>
+        </.fold>
       </div>
     </Layouts.app>
     """

@@ -20,7 +20,7 @@ defmodule ConductorWeb.RunLiveTest do
     assert_receive {:run_updated, %{id: "shop-2-1", status: "waiting_for_input"}}, 10_000
 
     {:ok, view, html} = live(conn, ~p"/runs/shop-2-1")
-    assert html =~ "# #2: Ask [fake:ask]"
+    assert html =~ "<h1>#2: Ask [fake:ask]</h1>"
     assert html =~ "Which way?"
 
     view |> form("#answer-q1", %{"text" => "left"}) |> render_submit()
@@ -52,6 +52,15 @@ defmodule ConductorWeb.RunLiveTest do
     })
 
     assert render(view) =~ "Thinking out loud"
+
+    # Markdown is rendered, and HTML in it is shown as text.
+    send_event.(%{
+      "type" => "message_update",
+      "changes" => [%{"type" => "text_delta", "delta" => " in **bold** <script>x</script>"}]
+    })
+
+    assert has_element?(view, "#live .prose strong", "bold")
+    refute has_element?(view, "#live script")
 
     send_event.(%{
       "type" => "tool_execution_start",
