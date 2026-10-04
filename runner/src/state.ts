@@ -47,6 +47,10 @@ export const RunsDoc = defineDoc<RunsState>({
 	initial: () => ({ runs: {} }),
 });
 
+/** The run of a head conversation or of one of its subagent conversations. */
 export function findRunByConversation(state: Readonly<RunsState>, conversationId: number): string | undefined {
-	return Object.keys(state.runs).find((id) => state.runs[id]!.conversationId === conversationId);
+	return Object.keys(state.runs).find((id) => {
+		const run = state.runs[id]!;
+		return run.conversationId === conversationId || Object.values(run.children).some((c) => c.conversationId === conversationId);
+	});
 }

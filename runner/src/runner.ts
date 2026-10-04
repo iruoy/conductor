@@ -19,7 +19,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { agentChoice, answerText, createConductorExtension, type GithubConfig, githubFromEnv, SubagentPrompt } from "./agent.ts";
+import { agentChoice, answerText, createConductorExtensions, type GithubConfig, githubFromEnv } from "./agent.ts";
 import { type GithubRun, type ModelMap, type RunRecord, RunsDoc, type Settled } from "./state.ts";
 
 export const VERSION = "0.1.0";
@@ -58,7 +58,7 @@ export class Runner {
 
 	static async open(options: RunnerOptions): Promise<Runner> {
 		const runner = new Runner(options);
-		const conductor = createConductorExtension(
+		const { head: conductor, subagent } = createConductorExtensions(
 			{
 				question: (runId, qid, text) => runner.emit({ type: "question", run_id: runId, qid, text }),
 				child: (runId, key, conversationId) =>
@@ -71,7 +71,7 @@ export class Runner {
 		const registry = createRegistry();
 		registry.install(CodingTools);
 		registry.install(conductor);
-		registry.install(SubagentPrompt);
+		registry.install(subagent);
 		runner.harness = await Harness.open(
 			options.storage,
 			{

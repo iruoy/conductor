@@ -1,5 +1,6 @@
 // The `conductor` extension the head conversation of every run selects: subagents per subtask, questions to a human,
-// and moving GitHub issues through the project's statuses. Subagents select `conductor-subagent` instead, which brings only a prompt.
+// and moving GitHub issues through the project's statuses. Subagents select `conductor-subagent` instead, which
+// brings their prompt and the status tool, so the head may leave a subtask's status to its subagent.
 import type { Context } from "@earendil-works/chord";
 import { type AssistantMessage, Type } from "@earendil-works/pi-ai";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -52,13 +53,7 @@ tree that other subagents may be editing at the same time: touch only what your 
 decision you cannot make yourself, stop and answer with a line starting \`NEEDS_INPUT:\` followed by the question.
 Otherwise finish with a short summary of what you changed and how you verified it.`;
 
-export const SubagentPrompt = defineExtension({
-	name: "conductor-subagent",
-	sections: [
-		section("preamble", () => SUBAGENT_PREAMBLE, { tag: false }),
-		section("cwd", (input) => input.env?.cwd),
-	],
-});
+export type ConductorExtensions = { head: Extension; subagent: Extension };
 
 const SubtaskSchema = Type.Object({
 	key: Type.String({ description: "Key of the subtask, e.g. #124" }),
@@ -92,7 +87,10 @@ export function waves(tasks: readonly Subtask[]): Subtask[][] {
 	return result;
 }
 
-export function createConductorExtension(hooks: AgentHooks, github: GithubConfig | undefined = githubFromEnv()): Extension {
+export function createConductorExtensions(
+	hooks: AgentHooks,
+	github: GithubConfig | undefined = githubFromEnv(),
+): ConductorExtensions {
 	const runIdOf = async (api: ToolExecutionApi, context: Context): Promise<string> => {
 		const state = await api.snapshot(RunsDoc, context);
 		const runId = state ? findRunByConversation(state, api.conversationId as number) : undefined;
@@ -115,7 +113,7 @@ export function createConductorExtension(hooks: AgentHooks, github: GithubConfig
 			const choice = run.models[task.complexity ?? "high"] ?? run.models.high ?? run.models.head;
 			await configure(tx, created.id, {
 				...agentChoice(choice),
-				extensions: [CodingTools, SubagentPrompt],
+				extensions: [CodingTools, subagent],
 				cwd: run.cwd,
 				instructions: `Subtask ${task.key}: ${task.title}`,
 			});
@@ -216,7 +214,16 @@ export function createConductorExtension(hooks: AgentHooks, github: GithubConfig
 		},
 	});
 
-	return defineExtension({
+	const subagent = defineExtension({
+		name: "conductor-subagent",
+		tools: [setStatusTool],
+		sections: [
+			section("preamble", () => SUBAGENT_PREAMBLE, { tag: false }),
+			section("cwd", (input) => input.env?.cwd),
+		],
+	});
+
+	const head = defineExtension({
 		name: "conductor",
 		tools: [runSubagents, askHuman, setStatusTool],
 		sections: [
@@ -224,6 +231,8 @@ export function createConductorExtension(hooks: AgentHooks, github: GithubConfig
 			section("cwd", (input) => input.env?.cwd),
 		],
 	});
+
+	return { head, subagent };
 }
 
 async function setIssueStatus(github: GithubConfig, run: GithubRun, number: number, status: string): Promise<string> {

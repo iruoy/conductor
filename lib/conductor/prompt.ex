@@ -21,7 +21,7 @@ defmodule Conductor.Prompt do
 
   - You are in a git working tree of `<%= @repo.name %>` on branch `<%= @branch %>`, created from `origin/<%= @base %>`.
   <%= if @subtasks != [] do %>- Implement the subtasks with the `run_subagents` tool: one task per subtask that is not <%= @project.done_status %> yet, with its key, title, complexity (<%= Enum.join(complexities(@subtasks), ", ") %> as listed above), complete instructions (a subagent sees nothing but its instructions), and `dependsOn` from the dependencies above. The subtasks are listed by priority: where the dependencies leave you a choice, do the higher priority first. You may also implement small subtasks yourself.
-  - Before a subtask starts, move it to <%= @project.active_status %> with `set_issue_status`; once its work is committed, move it to <%= @project.done_status %>.
+  - Before a subtask starts, move it to <%= @project.active_status %> with `set_issue_status`; once its work is committed, move it to <%= @project.done_status %>. Subagents have `set_issue_status` too, so you may leave this to them: tell them the issue number and both status names.
   - Each subtask is committed separately with the message `[<%= @issue["key"] %>][#SUBTASK-NUMBER] subtask title` (subagents commit only the files they changed; tell them so).
   <% else %>- Commit your work with the message `[<%= @issue["key"] %>] <%= @issue["summary"] %>`.
   <% end %><%= if @test_command do %>- Run `<%= @test_command %>` before every push and fix what fails.
