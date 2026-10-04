@@ -69,5 +69,25 @@ defmodule ConductorWeb.RunLiveTest do
 
     assert render(view) =~ "3 tests, 0 failures"
     assert has_element?(view, "#tab-4", "head")
+
+    # Once the result is in, it shows on the tool call, also after a reload.
+    call = %{"type" => "toolCall", "id" => "t1", "name" => "bash", "arguments" => %{}}
+    result = %{"role" => "toolResult", "toolCallId" => "t1", "toolName" => "bash"}
+    result = Map.put(result, "content", [%{"type" => "text", "text" => "all green"}])
+
+    for {id, kind, message} <- [
+          {1, "pi.assistant", %{"content" => [call]}},
+          {2, "pi.tool-result", result}
+        ] do
+      entry = %{"id" => id, "kind" => kind, "model" => [message]}
+      send_event.(%{"type" => "message_end", "entry" => entry})
+    end
+
+    assert has_element?(view, "#items-ev-4-e-1 details", "all green")
+    refute has_element?(view, "#items-ev-4-e-2")
+
+    {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+    assert has_element?(view, "#items-ev-4-e-1 details", "all green")
+    refute has_element?(view, "#items-ev-4-e-2")
   end
 end

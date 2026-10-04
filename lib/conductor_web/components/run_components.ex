@@ -23,15 +23,55 @@ defmodule ConductorWeb.RunComponents do
   def item_dom_id(conversation, entry),
     do: "ev-#{conversation}-#{String.replace(entry, ~r/[^A-Za-z0-9_-]/, "-")}"
 
-  @doc "Turns a persisted `Conductor.Runs.Event` into a stream item."
+  @doc """
+  Turns a persisted `Conductor.Runs.Event` into a stream item. `results` holds the results of an assistant
+  message's tool calls by call id, so each shows on its call (see `merge_results/1` and `put_result/2`).
+  """
   def item(%Conductor.Runs.Event{} = event) do
-    %{id: item_dom_id(event.conversation, event.entry), kind: event.kind, payload: event.payload}
+    %{
+      id: item_dom_id(event.conversation, event.entry),
+      kind: event.kind,
+      payload: event.payload,
+      results: %{}
+    }
   end
 
   @doc "Turns a live `message_end` entry into a stream item."
   def item(conversation, %{"id" => id, "kind" => kind} = entry) do
-    %{id: item_dom_id(conversation, "e:#{id}"), kind: kind, payload: entry}
+    %{id: item_dom_id(conversation, "e:#{id}"), kind: kind, payload: entry, results: %{}}
   end
+
+  @doc "Moves the tool results among `items` onto the assistant messages that made the calls."
+  def merge_results(items) do
+    results =
+      for %{kind: "pi.tool-result", payload: payload} <- items,
+          into: %{},
+          do: {result_call_id(payload), payload}
+
+    called = items |> Enum.flat_map(&call_ids/1) |> MapSet.new()
+
+    for item <- items,
+        not (item.kind == "pi.tool-result" and result_call_id(item.payload) in called) do
+      %{item | results: Map.take(results, call_ids(item))}
+    end
+  end
+
+  @doc "The ids of the tool calls an assistant message makes."
+  def call_ids(%{kind: "pi.assistant", payload: payload}) do
+    for %{"type" => "toolCall", "id" => id} <- message(payload)["content"] || [], do: id
+  end
+
+  def call_ids(_item), do: []
+
+  @doc "The calls of an assistant message that have no result yet."
+  def open_calls(item), do: call_ids(item) -- Map.keys(item.results)
+
+  @doc "The id of the tool call a tool result answers."
+  def result_call_id(payload), do: message(payload)["toolCallId"]
+
+  @doc "Adds a tool result to the assistant message that made the call."
+  def put_result(item, payload),
+    do: %{item | results: Map.put(item.results, result_call_id(payload), payload)}
 
   attr :from, :string, required: true, values: ~w(agent input)
   attr :text, :string, required: true
@@ -108,14 +148,7 @@ defmodule ConductorWeb.RunComponents do
               <div class="mt-1 whitespace-pre-wrap">{block["thinking"]}</div>
             </details>
           <% "toolCall" -> %>
-            <div class="ml-10 flex items-start gap-2 font-mono text-xs text-base-content/80">
-              <.icon
-                name="hero-wrench-screwdriver-micro"
-                class="mt-0.5 size-3.5 shrink-0 text-primary"
-              />
-              <span class="font-semibold">{block["name"]}</span>
-              <span class="line-clamp-3 break-all">{tool_args(block["arguments"])}</span>
-            </div>
+            <.tool_call block={block} result={@item.results[block["id"]]} />
           <% _ -> %>
         <% end %>
       <% end %>
@@ -158,6 +191,40 @@ defmodule ConductorWeb.RunComponents do
   def transcript_item(assigns) do
     ~H"""
     <div class="text-xs text-base-content/50">{@item.kind}</div>
+    """
+  end
+
+  attr :block, :map, required: true
+  attr :result, :map, default: nil
+
+  # A tool call; once its result is in, it opens to show it.
+  defp tool_call(%{result: nil} = assigns) do
+    ~H"""
+    <div class="ml-10 flex items-start gap-2 rounded-box border border-base-300 px-3 py-2 font-mono text-xs text-base-content/80">
+      <.icon name="hero-wrench-screwdriver-micro" class="mt-0.5 size-3.5 shrink-0 text-primary" />
+      <span class="font-semibold">{@block["name"]}</span>
+      <span class="line-clamp-3 break-all">{tool_args(@block["arguments"])}</span>
+    </div>
+    """
+  end
+
+  defp tool_call(assigns) do
+    ~H"""
+    <details class={[
+      "group ml-10 rounded-box border px-3 py-2 text-xs",
+      if(message(@result)["isError"], do: "border-error/40", else: "border-base-300")
+    ]}>
+      <summary class="flex cursor-pointer list-none items-start gap-2 font-mono text-base-content/80">
+        <.icon name="hero-wrench-screwdriver-micro" class="mt-0.5 size-3.5 shrink-0 text-primary" />
+        <span class="font-semibold">{@block["name"]}</span>
+        <span class="line-clamp-3 grow break-all">{tool_args(@block["arguments"])}</span>
+        <.icon
+          name="hero-chevron-right-micro"
+          class="mt-0.5 size-3.5 shrink-0 text-base-content/50 transition-transform group-open:rotate-90"
+        />
+      </summary>
+      <pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-all">{truncate(message_text(@result), 8000)}</pre>
+    </details>
     """
   end
 

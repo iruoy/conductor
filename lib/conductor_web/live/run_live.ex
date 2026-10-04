@@ -209,10 +209,14 @@ defmodule ConductorWeb.RunLive do
          "entry" => %{"kind" => kind} = entry
        }) do
     socket = if kind == "pi.assistant", do: assign(socket, live_text: ""), else: socket
+    item = item(conversation, entry)
+    calling = Enum.find(socket.assigns.calling, &(result_call_id(entry) in open_calls(&1)))
 
-    if kind == "pi.system",
-      do: socket,
-      else: stream_insert(socket, :items, item(conversation, entry))
+    cond do
+      kind == "pi.system" -> socket
+      kind == "pi.tool-result" and calling != nil -> insert(socket, put_result(calling, entry))
+      true -> insert(socket, item)
+    end
   end
 
   defp apply_event(socket, _conversation, %{"type" => "tool_execution_start"} = event) do
@@ -267,9 +271,19 @@ defmodule ConductorWeb.RunLive do
           |> Enum.reject(&(&1.kind == "tool_start")),
         else: []
 
+    items = items |> Enum.map(&item/1) |> merge_results()
+
     socket
     |> assign(selected: conversation, live_text: "", live_tools: %{})
-    |> stream(:items, Enum.map(items, &item/1), reset: true)
+    |> assign(calling: Enum.filter(items, &(open_calls(&1) != [])))
+    |> stream(:items, items, reset: true)
+  end
+
+  # `calling` keeps the assistant messages that still wait for a tool result, to put the result on its call.
+  defp insert(socket, item) do
+    calling = Enum.reject(socket.assigns.calling, &(&1.id == item.id))
+    calling = if open_calls(item) == [], do: calling, else: calling ++ [item]
+    socket |> assign(calling: calling) |> stream_insert(:items, item)
   end
 
   # A subtask's tab is its issue number (`sub:#12` is `#12`); one that ran more than once also counts its attempts.
