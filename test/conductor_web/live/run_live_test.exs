@@ -51,6 +51,9 @@ defmodule ConductorWeb.RunLiveTest do
       "changes" => [%{"type" => "text_delta", "delta" => "Thinking out loud"}]
     })
 
+    # Aborting a run that is still going asks first, in a dialog.
+    assert has_element?(view, "dialog#confirm-abort #confirm-abort-confirm", "Abort")
+
     assert render(view) =~ "Thinking out loud"
 
     # Markdown is rendered, and HTML in it is shown as text.

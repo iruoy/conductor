@@ -37,12 +37,20 @@ defmodule ConductorWeb.RunLive do
           <button
             :if={not Run.terminal?(@run) and @run.status != "handing_off"}
             id="abort"
-            phx-click="abort"
-            data-confirm="Abort this run?"
+            phx-click={show_modal("confirm-abort")}
             class="btn btn-sm btn-error btn-outline"
           >
             Abort
           </button>
+          <.confirm_modal
+            :if={not Run.terminal?(@run) and @run.status != "handing_off"}
+            id="confirm-abort"
+            title="Abort this run?"
+            confirm="Abort"
+            on_confirm={JS.push("abort")}
+          >
+            The agent stops and the run is marked as failed.
+          </.confirm_modal>
         </:actions>
       </.header>
 

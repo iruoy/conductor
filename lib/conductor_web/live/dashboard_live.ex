@@ -96,34 +96,45 @@ defmodule ConductorWeb.DashboardLive do
                 <button
                   :if={not Conductor.Runs.Run.terminal?(run) and run.status != "handing_off"}
                   id={"abort-#{run.id}"}
-                  phx-click="abort"
-                  phx-value-id={run.id}
-                  data-confirm={"Abort #{run.id}?"}
+                  phx-click={show_modal("confirm-abort-#{run.id}")}
                   class="btn btn-ghost btn-xs text-error"
                 >
                   Abort
                 </button>
+                <.confirm_modal
+                  :if={not Conductor.Runs.Run.terminal?(run) and run.status != "handing_off"}
+                  id={"confirm-abort-#{run.id}"}
+                  title={"Abort #{run.id}?"}
+                  confirm="Abort"
+                  on_confirm={JS.push("abort", value: %{id: run.id})}
+                >
+                  The agent stops and the run is marked as failed.
+                </.confirm_modal>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <section :if={@selected} class="rounded-box border border-base-300">
-        <div class="flex items-center justify-between border-b border-base-300 px-4 py-2">
-          <h2 class="text-sm font-semibold">
-            Live log ·
-            <.link navigate={~p"/runs/#{@selected}"} class="link font-mono">{@selected}</.link>
-          </h2>
-          <button phx-click="select" phx-value-id="" class="btn btn-ghost btn-xs">Close</button>
-        </div>
-        <div id="log" phx-update="stream" class="max-h-96 overflow-y-auto px-4 py-2 font-mono text-xs">
-          <div id="log-empty" class="hidden py-2 text-base-content/50 only:block">
-            Waiting for activity…
+      <section :if={@selected} class="card card-border card-sm border-base-300">
+        <div class="card-body">
+          <div class="flex items-center justify-between">
+            <h2 class="card-title text-sm">
+              Live log ·
+              <.link navigate={~p"/runs/#{@selected}"} class="link font-mono">{@selected}</.link>
+            </h2>
+            <div class="card-actions">
+              <button phx-click="select" phx-value-id="" class="btn btn-ghost btn-xs">Close</button>
+            </div>
           </div>
-          <div :for={{dom_id, line} <- @streams.log} id={dom_id} class="flex gap-2 py-0.5">
-            <span class="shrink-0 text-base-content/50">{line.role}</span>
-            <span class={["break-all", line.class]}>{line.text}</span>
+          <div id="log" phx-update="stream" class="max-h-96 overflow-y-auto font-mono text-xs">
+            <div id="log-empty" class="hidden py-2 text-base-content/50 only:block">
+              Waiting for activity…
+            </div>
+            <div :for={{dom_id, line} <- @streams.log} id={dom_id} class="flex gap-2 py-0.5">
+              <span class="shrink-0 text-base-content/50">{line.role}</span>
+              <span class={["break-all", line.class]}>{line.text}</span>
+            </div>
           </div>
         </div>
       </section>

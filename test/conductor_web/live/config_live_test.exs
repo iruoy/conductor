@@ -70,5 +70,14 @@ defmodule ConductorWeb.ConfigLiveTest do
     assert settings.models == %{
              "head" => %{"provider" => "faux", "modelId" => "faux-1", "reasoning" => "high"}
            }
+
+    # Deleting asks first, in a dialog.
+    [project] = Config.list_projects()
+    assert has_element?(view, "dialog#confirm-delete-project-#{project.id}")
+    view |> element("#confirm-delete-project-#{project.id}-confirm") |> render_click()
+    assert Config.list_projects() == []
+
+    view |> element("#confirm-delete-repo-#{repo.id}-confirm") |> render_click()
+    assert Config.list_repos() == []
   end
 end
