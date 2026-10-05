@@ -13,16 +13,20 @@ export function levelForEffort(model: Model<Api>, effort: string): ModelThinking
 /** Null when the provider does not tell: not a reasoning model, not the Responses API, no auth, or a failed request. */
 export async function probeDefaultLevel(models: Models, model: Model<Api>): Promise<ModelThinkingLevel | null> {
 	if (!model.reasoning || model.api !== "openai-responses") return null;
-	const apiKey = (await models.getAuth(model))?.auth.apiKey;
-	if (apiKey === undefined) return null;
+	// The resolved auth, not the model's static metadata: a provider may derive its endpoint and headers at login.
+	const auth = (await models.getAuth(model))?.auth;
+	if (auth === undefined) return null;
+	const headers: Record<string, string> = { "Content-Type": "application/json" };
+	if (auth.apiKey !== undefined) headers.Authorization = `Bearer ${auth.apiKey}`;
+	for (const [name, value] of Object.entries(auth.headers ?? {})) if (typeof value === "string") headers[name] = value;
 
 	const abort = new AbortController();
 	const timeout = setTimeout(() => abort.abort(), PROBE_TIMEOUT_MS);
 	try {
-		const response = await fetch(`${model.baseUrl}/responses`, {
+		const response = await fetch(`${auth.baseUrl ?? model.baseUrl}/responses`, {
 			method: "POST",
 			signal: abort.signal,
-			headers: { ...model.headers, Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+			headers,
 			body: JSON.stringify({
 				model: model.id,
 				input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],

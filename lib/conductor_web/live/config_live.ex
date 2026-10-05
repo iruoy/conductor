@@ -533,22 +533,28 @@ defmodule ConductorWeb.ConfigLive do
       for {_role, choice} <- choices,
           choice["reasoning"] in [nil, ""],
           not is_map_key(socket.assigns.model_defaults, model_value(choice)),
-          uniq: true,
           do: choice
 
+    # Side by side, so the page waits for the slowest answer rather than for all of them in turn.
     defaults =
-      for choice <- wanted, into: socket.assigns.model_defaults do
-        command = %{
-          type: "model_default",
-          provider: choice["provider"],
-          model_id: choice["modelId"]
-        }
+      wanted
+      |> Enum.uniq_by(&model_value/1)
+      |> Task.async_stream(
+        fn choice ->
+          command = %{
+            type: "model_default",
+            provider: choice["provider"],
+            model_id: choice["modelId"]
+          }
 
-        case Runner.call(command, 15_000) do
-          {:ok, level} -> {model_value(choice), level}
-          {:error, _reason} -> {model_value(choice), nil}
-        end
-      end
+          case Runner.call(command, 15_000) do
+            {:ok, level} -> {model_value(choice), level}
+            {:error, _reason} -> {model_value(choice), nil}
+          end
+        end,
+        timeout: :infinity
+      )
+      |> Enum.into(socket.assigns.model_defaults, fn {:ok, default} -> default end)
 
     assign(socket, model_defaults: defaults)
   end
