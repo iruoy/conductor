@@ -55,6 +55,18 @@ defmodule ConductorWeb.ConfigLiveTest do
     # Model choices come from the runner.
     assert render(view) =~ "Faux 1"
 
+    # Choosing a model offers its reasoning levels and selects its default one.
+    view
+    |> form("#settings-form", settings: %{models: %{head: %{model: "faux/faux-1"}}})
+    |> render_change(%{"_target" => ["settings", "models", "head", "model"]})
+
+    assert has_element?(view, "#reasoning-head option[value=high][selected]")
+    assert has_element?(view, "#reasoning-head option[value=low]")
+    refute has_element?(view, "#reasoning-head option[value=medium]")
+    # A chosen model always has a level; only a role without a model can leave it unset.
+    refute has_element?(view, "#reasoning-head option[value='']")
+    assert has_element?(view, "#reasoning-low option[value='']")
+
     view
     |> form("#settings-form",
       settings: %{
@@ -125,6 +137,18 @@ defmodule ConductorWeb.ConfigLiveTest do
     assert has_element?(view, "#model-head option[value='saved/unlisted'][selected]")
     assert has_element?(view, "#reasoning-head option[value='medium'][selected]")
 
+    # Reasoning levels become available only after choosing each role's model.
+    view
+    |> form("#settings-form",
+      settings: %{
+        models: %{head: %{model: "faux/faux-1"}, low: %{model: "faux/faux-1"}}
+      }
+    )
+    |> render_change(%{"_target" => ["settings", "models", "head", "model"]})
+
+    assert has_element?(view, "#reasoning-head option[value='high'][selected]")
+    assert has_element?(view, "#reasoning-low option[value='low']")
+
     params = %{
       max_concurrent: "21",
       prune_days: "0",
@@ -149,6 +173,12 @@ defmodule ConductorWeb.ConfigLiveTest do
     assert settings.prune_days == 5
     assert settings.models["low"]["reasoning"] == "low"
     assert Config.run_models(settings)["medium"] == settings.models["head"]
+
+    view
+    |> form("#settings-form", settings: %{models: %{low: %{model: ""}}})
+    |> render_change(%{"_target" => ["settings", "models", "low", "model"]})
+
+    assert has_element?(view, "#reasoning-low option[value='']")
 
     view
     |> form("#settings-form", settings: %{models: %{low: %{model: "", reasoning: ""}}})

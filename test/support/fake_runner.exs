@@ -47,6 +47,8 @@ defmodule FakeRunner do
     )
   end
 
+  defp handle(%{"type" => "model_default"} = c, state), do: ok(c, "high", state)
+
   defp handle(%{"type" => "start_run", "run_id" => id, "prompt" => prompt} = c, state) do
     case state[id] do
       nil ->
