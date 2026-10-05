@@ -79,7 +79,7 @@ defmodule Conductor.RunsTest do
            ]
   end
 
-  test "attempts, statuses, loaded relationships and manual broadcasts retain their contracts" do
+  test "attempts, statuses, loaded relationships and notifier broadcasts retain their contracts" do
     project = project_fixture()
     Runs.subscribe()
     Runs.subscribe("SHOP-1-1")
@@ -150,10 +150,13 @@ defmodule Conductor.RunsTest do
     run = run_fixture(project_fixture(), "SHOP-1")
     Runs.subscribe(run.id)
     {:ok, question} = Runs.upsert_question(run.id, "q1", "  original\n")
+    assert_receive {:question, %{id: question_id, answer: nil}}
+    assert question_id == question.id
     assert question.text == "  original\n"
     {:ok, answered} = Runs.answer_question(question, "yes")
-    assert_receive {:question, ^answered}
+    assert_receive {:question, %{id: ^question_id, answer: "yes"}}
     {:ok, replayed} = Runs.upsert_question(run.id, "q1", "replacement")
+    assert_receive {:question, %{id: ^question_id, answer: "yes"}}
     assert replayed.id == question.id
     assert replayed.text == question.text
     assert replayed.answer == "yes"
@@ -167,6 +170,10 @@ defmodule Conductor.RunsTest do
                %{"qid" => "q2", "text" => "new", "answered" => true}
              ])
 
+    assert_receive {:question, %{qid: "q1", answer: "yes"}}
+    assert_receive {:question, %{qid: "q2", answered_at: nil}}
+    assert_receive {:question, %{qid: "q2", answered_at: answered_at}}
+    assert answered_at
     assert Runs.get_question(run.id, "q1").answer == "yes"
     assert Runs.get_question(run.id, "q2").answered_at
     assert length(Runs.list_questions(run.id)) == 2

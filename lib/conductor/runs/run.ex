@@ -7,7 +7,8 @@ defmodule Conductor.Runs.Run do
   use Ash.Resource,
     domain: Conductor.Runs,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshStateMachine]
+    extensions: [AshStateMachine],
+    notifiers: [Conductor.Runs.Notifier]
 
   @terminal ~w(completed failed)a
 

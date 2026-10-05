@@ -86,7 +86,6 @@ defmodule Conductor.Runs do
       issue_snapshot: snapshot
     })
     |> persist(:create)
-    |> tap_ok(&broadcast/1)
   end
 
   for action <- [
@@ -112,7 +111,6 @@ defmodule Conductor.Runs do
     run
     |> Ash.Changeset.for_update(action, attrs)
     |> persist(:update)
-    |> tap_ok(&broadcast/1)
   end
 
   defp persist(changeset, action), do: apply(Ash, action, [changeset])
@@ -127,12 +125,6 @@ defmodule Conductor.Runs do
       status in ^terminal and not is_nil(workspace_path) and updated_at < ^cutoff
     )
     |> Ash.read!()
-  end
-
-  defp broadcast(%Run{} = run) do
-    run = Ash.load!(run, :project)
-    Phoenix.PubSub.broadcast(@pubsub, "runs", {:run_updated, run})
-    Phoenix.PubSub.broadcast(@pubsub, "run:" <> run.id, {:run_updated, run})
   end
 
   ## Transcript
@@ -174,8 +166,8 @@ defmodule Conductor.Runs do
 
   def ingest(%{"type" => "question", "run_id" => run_id, "qid" => qid, "text" => text}) do
     with %Run{} <- Ash.get!(Run, run_id, not_found_error?: false),
-         {:ok, question} <- upsert_question(run_id, qid, text) do
-      Phoenix.PubSub.broadcast(@pubsub, "run:" <> run_id, {:question, question})
+         {:ok, _question} <- upsert_question(run_id, qid, text) do
+      :ok
     end
 
     :ok
@@ -272,7 +264,6 @@ defmodule Conductor.Runs do
     question
     |> Ash.Changeset.for_update(:update, %{answer: answer, answered_at: DateTime.utc_now(:second)})
     |> persist(:update)
-    |> tap_ok(&Phoenix.PubSub.broadcast(@pubsub, "run:" <> &1.run_id, {:question, &1}))
   end
 
   @doc "Takes over the runner's view of questions after a restart: marks answered ones, adds missing ones."
@@ -289,11 +280,4 @@ defmodule Conductor.Runs do
 
     :ok
   end
-
-  defp tap_ok({:ok, value} = result, fun) do
-    fun.(value)
-    result
-  end
-
-  defp tap_ok(other, _fun), do: other
 end

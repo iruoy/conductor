@@ -1,6 +1,9 @@
 defmodule Conductor.Runs.Question do
   @moduledoc "A question the agent asked a human, and its answer once given."
-  use Ash.Resource, domain: Conductor.Runs, data_layer: AshPostgres.DataLayer
+  use Ash.Resource,
+    domain: Conductor.Runs,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [Conductor.Runs.Notifier]
 
   postgres do
     table "questions"
