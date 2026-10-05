@@ -15,6 +15,28 @@ defmodule Conductor.Runs.Run do
   postgres do
     table "runs"
     repo Conductor.Repo
+
+    migration_types id: :string,
+                    issue_key: :string,
+                    workspace_path: :string,
+                    branch: :string,
+                    outcome: :string,
+                    pr_url: :string,
+                    status: :string,
+                    attempt: :integer
+
+    migration_defaults inserted_at: "nil", updated_at: "nil", status: "nil"
+
+    references do
+      reference :project, on_delete: :restrict
+    end
+
+    identity_index_names issue_key_attempt: "runs_issue_key_attempt_index"
+
+    custom_indexes do
+      index [:issue_key], name: "runs_issue_key_index"
+      index [:status], name: "runs_status_index"
+    end
   end
 
   state_machine do
@@ -147,6 +169,10 @@ defmodule Conductor.Runs.Run do
     has_many :questions, Conductor.Runs.Question do
       public? true
     end
+  end
+
+  identities do
+    identity :issue_key_attempt, [:issue_key, :attempt]
   end
 
   def statuses, do: AshStateMachine.Info.state_machine_all_states(__MODULE__)

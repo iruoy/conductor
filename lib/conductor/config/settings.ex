@@ -5,6 +5,8 @@ defmodule Conductor.Config.Settings do
   postgres do
     table "settings"
     repo Conductor.Repo
+    migration_types max_concurrent: :integer, prune_days: :integer
+    migration_defaults inserted_at: "nil", updated_at: "nil"
   end
 
   actions do
@@ -21,6 +23,7 @@ defmodule Conductor.Config.Settings do
 
     attribute :models, Conductor.Config.Models do
       public? true
+      allow_nil? false
       default %{}
     end
 

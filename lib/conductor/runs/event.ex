@@ -10,6 +10,20 @@ defmodule Conductor.Runs.Event do
   postgres do
     table "run_events"
     repo Conductor.Repo
+
+    migration_types role: :string,
+                    entry: :string,
+                    kind: :string,
+                    run_id: :string,
+                    conversation: :integer,
+                    position: :integer
+
+    migration_defaults inserted_at: "nil"
+
+    references do
+      reference :run, on_delete: :delete
+    end
+
     identity_index_names run_id_conversation_entry: "run_events_run_id_conversation_entry_index"
   end
 

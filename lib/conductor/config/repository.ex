@@ -5,6 +5,15 @@ defmodule Conductor.Config.Repository do
   postgres do
     table "repos"
     repo Conductor.Repo
+
+    migration_types name: :string,
+                    clone_url: :string,
+                    owner: :string,
+                    slug: :string,
+                    base_branch: :string,
+                    test_command: :string
+
+    migration_defaults inserted_at: "nil", updated_at: "nil"
     identity_index_names name: "repos_name_index"
     foreign_key_names [{:name, "projects_repo_id_fkey", "is used by a project"}]
   end

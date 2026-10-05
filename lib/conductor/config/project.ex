@@ -6,6 +6,21 @@ defmodule Conductor.Config.Project do
     table "projects"
     repo Conductor.Repo
 
+    migration_types project_owner: :string,
+                    runner_login: :string,
+                    pickup_status: :string,
+                    active_status: :string,
+                    handoff_status: :string,
+                    done_status: :string,
+                    item_filter: :string,
+                    project_number: :integer
+
+    migration_defaults inserted_at: "nil", updated_at: "nil"
+
+    references do
+      reference :repo, on_delete: :restrict
+    end
+
     identity_index_names repo_id_project_owner_project_number:
                            "projects_repo_id_project_owner_project_number_index"
 
@@ -64,6 +79,7 @@ defmodule Conductor.Config.Project do
     attribute :project_number, :integer do
       public? true
       allow_nil? false
+      default 0
     end
 
     attribute :item_filter, :string do
@@ -72,6 +88,7 @@ defmodule Conductor.Config.Project do
 
     attribute :enabled, :boolean do
       public? true
+      allow_nil? false
       default true
     end
 
