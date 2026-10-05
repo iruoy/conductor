@@ -122,15 +122,11 @@ custom classes must fully style the input
 <!-- phoenix:phoenix-end -->
 
 <!-- phoenix:ecto-start -->
-## Ecto Guidelines
+## Ash resource and domain guidelines
 
-- **Always** preload Ecto associations in queries when they'll be accessed in templates, ie a message that needs to reference the `message.user.email`
-- Remember `import Ecto.Query` and other supporting modules when you write `seeds.exs`
-- `Ecto.Schema` fields always use the `:string` type, even for `:text`, columns, ie: `field :name, :string`
-- `Ecto.Changeset.validate_number/2` **DOES NOT SUPPORT the `:allow_nil` option**. By default, Ecto validations only run if a change for the given field exists and the change value is not nil, so such as option is never needed
-- You **must** use `Ecto.Changeset.get_field(changeset, :field)` to access changeset fields
-- Fields which are set programmatically, such as `user_id`, must not be listed in `cast` calls or similar for security purposes. Instead they must be explicitly set when creating the struct
-- **Always** invoke `mix ecto.gen.migration migration_name_using_underscores` when generating migration files, so the correct timestamp and conventions are applied
+- Model persisted data as Ash resources grouped into domains. Put application operations behind domain code interfaces; callers should not construct persistence queries or invoke resource actions directly.
+- Use Ash queries and changesets for reads and writes. Direct Ecto queries are exceptional; a narrowly scoped grouped query on `Conductor.Runs.Event` is allowed when it avoids loading the full transcript.
+- Generate migrations with `mix ash.codegen <name>`; do not use `mix ecto.gen.migration`.
 <!-- phoenix:ecto-end -->
 
 <!-- phoenix:html-start -->
@@ -401,30 +397,9 @@ You can also specify a name to nest the params:
       {:noreply, assign(socket, form: to_form(user_params, as: :user))}
     end
 
-#### Creating a form from changesets
+#### AshPhoenix forms
 
-When using changesets, the underlying data, form params, and errors are retrieved from it. The `:as` option is automatically computed too. E.g. if you have a user schema:
-
-    defmodule MyApp.Users.User do
-      use Ecto.Schema
-      ...
-    end
-
-And then you create a changeset that you pass to `to_form`:
-
-    %MyApp.Users.User{}
-    |> Ecto.Changeset.change()
-    |> to_form()
-
-Once the form is submitted, the params will be available under `%{"user" => user_params}`.
-
-In the template, the form form assign can be passed to the `<.form>` function component:
-
-    <.form for={@form} id="todo-form" phx-change="validate" phx-submit="save">
-      <.input field={@form[:field]} type="text" />
-    </.form>
-
-Always give the form an explicit, unique DOM ID, like `id="todo-form"`.
+Use `AshPhoenix.Form` to build and validate forms from Ash resource actions (`Form.for_create/3`, `Form.for_update/3`), and submit through the form. Keep persistence and validation in resource actions and domain interfaces; do not adapt Ash changesets into Ecto changesets for Phoenix forms. Assign the form via `to_form/1` and use `<.input>` with `@form[:field]`.
 
 #### Avoiding form errors
 
@@ -443,7 +418,7 @@ And **never** do this:
     </.form>
 
 - You are FORBIDDEN from accessing the changeset in the template as it will cause errors
-- **Never** use `<.form let={f} ...>` in the template, instead **always use `<.form for={@form} ...>`**, then drive all form references from the form assign as in `@form[:field]`. The UI should **always** be driven by a `to_form/2` assigned in the LiveView module that is derived from a changeset
+- **Never** use `<.form let={f} ...>` in the template, instead **always use `<.form for={@form} ...>`**, then drive all form references from the form assign as in `@form[:field]`. The UI should **always** be driven by a `to_form/2` assigned in the LiveView module that is derived from an AshPhoenix.Form
 <!-- phoenix:liveview-end -->
 
 <!-- usage-rules-end -->

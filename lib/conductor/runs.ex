@@ -6,13 +6,21 @@ defmodule Conductor.Runs do
   `{:agent_event, payload}`, `{:question, question}`). Streaming deltas only travel over PubSub; finished messages and
   tool starts are also persisted, upserted by `(run_id, conversation, entry)`.
   """
+  use Ash.Domain
+  require Ash.Query
   import Ecto.Query
   require Logger
   alias Conductor.Repo
   alias Conductor.Runs.{Event, Question, Run}
 
+  resources do
+    resource Run
+    resource Question
+    resource Event
+  end
+
   @pubsub Conductor.PubSub
-  @active ~w(provisioning running handing_off)
+  @active ~w(provisioning running handing_off)a
 
   def subscribe, do: Phoenix.PubSub.subscribe(@pubsub, "runs")
   def subscribe(run_id), do: Phoenix.PubSub.subscribe(@pubsub, "run:" <> run_id)
@@ -21,29 +29,34 @@ defmodule Conductor.Runs do
   ## Runs
 
   def list_runs(limit \\ 200) do
-    Repo.all(
-      from r in Run, order_by: [desc: r.inserted_at, desc: r.id], limit: ^limit, preload: :project
-    )
+    Run
+    |> Ash.Query.sort(inserted_at: :desc, id: :desc)
+    |> Ash.Query.limit(limit)
+    |> Ash.Query.load(:project)
+    |> Ash.read!()
   end
 
-  def get_run(id), do: Repo.get(Run, id) |> Repo.preload(project: :repo)
-  def get_run!(id), do: Repo.get!(Run, id) |> Repo.preload(project: :repo)
+  def get_run(id), do: Ash.get!(Run, id, load: [project: :repo], not_found_error?: false)
+  def get_run!(id), do: Ash.get!(Run, id, load: [project: :repo], not_found_error?: true)
 
   def list_by_status(statuses) do
-    Repo.all(
-      from r in Run,
-        where: r.status in ^statuses,
-        order_by: r.inserted_at,
-        preload: [project: :repo]
-    )
+    Run
+    |> Ash.Query.filter(status in ^statuses)
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.Query.load(project: :repo)
+    |> Ash.read!()
   end
 
   @doc "Runs that hold a concurrency slot. A run waiting for a human does not."
-  def active_count, do: Repo.aggregate(from(r in Run, where: r.status in @active), :count)
+  def active_count do
+    Run |> Ash.Query.filter(status in ^@active) |> Ash.count!()
+  end
 
   def next_queued do
-    from(r in Run, where: r.status == "picked_up", order_by: [r.inserted_at, r.id])
-    |> Repo.all()
+    Run
+    |> Ash.Query.filter(status == :picked_up)
+    |> Ash.Query.sort([:inserted_at, :id])
+    |> Ash.read!()
     |> Enum.min_by(&priority_rank/1, fn -> nil end)
   end
 
@@ -53,67 +66,89 @@ defmodule Conductor.Runs do
   def open_issue_keys(keys) do
     terminal = Run.terminal_statuses()
 
-    Repo.all(
-      from r in Run,
-        where: r.issue_key in ^keys and r.status not in ^terminal,
-        select: r.issue_key,
-        distinct: true
-    )
+    Run
+    |> Ash.Query.filter(issue_key in ^keys and status not in ^terminal)
+    |> Ash.Query.select(:issue_key)
+    |> Ash.read!()
+    |> Enum.map(& &1.issue_key)
+    |> Enum.uniq()
   end
 
   def create_run(project, issue_key, snapshot) do
     attempt =
-      (Repo.one(from r in Run, where: r.issue_key == ^issue_key, select: max(r.attempt)) || 0) + 1
+      (Run |> Ash.Query.filter(issue_key == ^issue_key) |> Ash.max!(:attempt) || 0) + 1
 
-    %Run{
+    Run
+    |> Ash.Changeset.for_create(:create, %{
       id: Run.id_for(issue_key, attempt),
       issue_key: issue_key,
       attempt: attempt,
-      project_id: project.id
-    }
-    |> Run.changeset(%{status: "picked_up", issue_snapshot: snapshot})
-    |> Repo.insert()
-    |> tap_ok(&broadcast/1)
+      project_id: project.id,
+      issue_snapshot: snapshot
+    })
+    |> persist(:create)
   end
 
-  def update_run(%Run{} = run, attrs) do
-    run
-    |> Run.changeset(attrs)
-    |> Repo.update()
-    |> tap_ok(&broadcast/1)
+  for action <- [
+        :pump,
+        :provision_end,
+        :wait_for_input,
+        :resume,
+        :settle,
+        :complete,
+        :hand_off_failed,
+        :abort,
+        :fail,
+        :set_workspace_path,
+        :set_branch,
+        :clear_workspace
+      ] do
+    def unquote(action)(%Run{} = run, attrs \\ %{}) do
+      update_action(run, unquote(action), attrs)
+    end
   end
+
+  defp update_action(run, action, attrs) do
+    run
+    |> Ash.Changeset.for_update(action, attrs)
+    |> persist(:update)
+  end
+
+  defp persist(changeset, action), do: apply(Ash, action, [changeset])
 
   @doc "Terminal runs whose workspace is older than `days`."
   def list_prunable(days) do
     cutoff = DateTime.utc_now() |> DateTime.add(-days, :day)
     terminal = Run.terminal_statuses()
 
-    Repo.all(
-      from r in Run,
-        where: r.status in ^terminal and not is_nil(r.workspace_path) and r.updated_at < ^cutoff
+    Run
+    |> Ash.Query.filter(
+      status in ^terminal and not is_nil(workspace_path) and updated_at < ^cutoff
     )
-  end
-
-  defp broadcast(%Run{} = run) do
-    run = Repo.preload(run, :project)
-    Phoenix.PubSub.broadcast(@pubsub, "runs", {:run_updated, run})
-    Phoenix.PubSub.broadcast(@pubsub, "run:" <> run.id, {:run_updated, run})
+    |> Ash.read!()
   end
 
   ## Transcript
 
-  # First-persisted order includes tool starts and notes, which have no runner position.
-  # Upserts preserve the row id, so replaying a snapshot does not move existing events.
+  # Row ids break ties for entries without a runner position and are preserved on replay.
   def list_events(run_id, conversation \\ nil) do
     query =
-      from e in Event, where: e.run_id == ^run_id, order_by: e.id
+      Event
+      |> Ash.Query.filter(run_id == ^run_id)
+      |> Ash.Query.sort([:conversation, :position, :id])
 
-    query = if conversation, do: where(query, [e], e.conversation == ^conversation), else: query
-    Repo.all(query)
+    query =
+      if is_nil(conversation),
+        do: query,
+        else: Ash.Query.filter(query, conversation == ^conversation)
+
+    Ash.read!(query)
   end
 
   @doc "The run's conversations as `{conversation, role}`, the head first."
   def conversations(run_id) do
+    # This small grouped Ecto query over the Ash resource returns only conversation/role
+    # pairs ordered by first appearance, without loading the entire transcript into memory.
     Repo.all(
       from e in Event,
         where: e.run_id == ^run_id,
@@ -138,8 +173,9 @@ defmodule Conductor.Runs do
   end
 
   def ingest(%{"type" => "question", "run_id" => run_id, "qid" => qid, "text" => text}) do
-    with %Run{} <- Repo.get(Run, run_id), {:ok, question} <- upsert_question(run_id, qid, text) do
-      Phoenix.PubSub.broadcast(@pubsub, "run:" <> run_id, {:question, question})
+    with %Run{} <- Ash.get!(Run, run_id, not_found_error?: false),
+         {:ok, _question} <- upsert_question(run_id, qid, text) do
+      :ok
     end
 
     :ok
@@ -147,14 +183,18 @@ defmodule Conductor.Runs do
 
   def ingest(%{"type" => "run_state", "run_id" => run_id, "status" => status})
       when status in ~w(running waiting_for_input) do
-    case Repo.get(Run, run_id) do
-      %Run{status: current} = run
-      when current in ~w(running waiting_for_input) and current != status ->
-        update_run(run, %{status: status})
+    case Ash.get!(Run, run_id, not_found_error?: false) do
+      %Run{} = run ->
+        case status do
+          "running" -> resume(run)
+          "waiting_for_input" -> wait_for_input(run)
+        end
 
-      _ ->
+      nil ->
         :ok
     end
+
+    :ok
   end
 
   def ingest(_event), do: :ok
@@ -189,8 +229,7 @@ defmodule Conductor.Runs do
       entry: entry,
       position: position,
       kind: kind,
-      payload: payload,
-      inserted_at: DateTime.utc_now(:second)
+      payload: payload
     }
   end
 
@@ -200,10 +239,19 @@ defmodule Conductor.Runs do
     |> Enum.reject(&(&1.kind == "pi.system"))
     |> Enum.chunk_every(100)
     |> Enum.each(fn chunk ->
-      Repo.insert_all(Event, chunk,
-        on_conflict: {:replace, [:payload, :kind, :position, :role]},
-        conflict_target: [:run_id, :conversation, :entry]
-      )
+      result =
+        Ash.bulk_create(chunk, Event, :create,
+          batch_size: 100,
+          transaction: false,
+          return_records?: false,
+          return_errors?: true,
+          notify?: false,
+          return_notifications?: false
+        )
+
+      if result.error_count > 0 do
+        Logger.warning("dropping transcript events: #{inspect(result.errors)}")
+      end
     end)
   rescue
     error -> Logger.warning("dropping transcript events: #{Exception.message(error)}")
@@ -212,23 +260,26 @@ defmodule Conductor.Runs do
   ## Questions
 
   def list_questions(run_id) do
-    Repo.all(from q in Question, where: q.run_id == ^run_id, order_by: q.inserted_at)
+    Question
+    |> Ash.Query.filter(run_id == ^run_id)
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.read!()
   end
 
-  def get_question(run_id, qid), do: Repo.get_by(Question, run_id: run_id, qid: qid)
+  def get_question(run_id, qid) do
+    Question |> Ash.Query.filter(run_id == ^run_id and qid == ^qid) |> Ash.read_one!()
+  end
 
   def upsert_question(run_id, qid, text) do
-    case get_question(run_id, qid) do
-      nil -> Repo.insert(%Question{run_id: run_id, qid: qid, text: text})
-      question -> {:ok, question}
-    end
+    Question
+    |> Ash.Changeset.for_create(:create, %{run_id: run_id, qid: qid, text: text})
+    |> persist(:create)
   end
 
   def answer_question(%Question{} = question, answer) do
     question
-    |> Ecto.Changeset.change(answer: answer, answered_at: DateTime.utc_now(:second))
-    |> Repo.update()
-    |> tap_ok(&Phoenix.PubSub.broadcast(@pubsub, "run:" <> &1.run_id, {:question, &1}))
+    |> Ash.Changeset.for_update(:update, %{answer: answer, answered_at: DateTime.utc_now(:second)})
+    |> persist(:update)
   end
 
   @doc "Takes over the runner's view of questions after a restart: marks answered ones, adds missing ones."
@@ -238,18 +289,11 @@ defmodule Conductor.Runs do
 
       if answered and is_nil(question.answered_at) do
         question
-        |> Ecto.Changeset.change(answered_at: DateTime.utc_now(:second))
-        |> Repo.update!()
+        |> Ash.Changeset.for_update(:update, %{answered_at: DateTime.utc_now(:second)})
+        |> Ash.update!()
       end
     end
 
     :ok
   end
-
-  defp tap_ok({:ok, value} = result, fun) do
-    fun.(value)
-    result
-  end
-
-  defp tap_ok(other, _fun), do: other
 end

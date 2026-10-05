@@ -1,54 +1,113 @@
 defmodule Conductor.Config.Project do
-  @moduledoc """
-  A GitHub Project whose issues in one repository Conductor picks up when they are assigned to the runner account.
-  The statuses are options of the project's Status field.
-  """
-  use Ecto.Schema
-  import Ecto.Changeset
+  @moduledoc "Project configuration stored in the existing projects table."
+  use Ash.Resource, domain: Conductor.Config, data_layer: AshPostgres.DataLayer
 
-  schema "projects" do
-    field :project_owner, :string
-    field :project_number, :integer
-    field :runner_login, :string
-    field :pickup_status, :string
-    field :active_status, :string
-    field :handoff_status, :string
-    field :done_status, :string, default: "Done"
-    field :item_filter, :string
-    field :enabled, :boolean, default: true
-    belongs_to :repo, Conductor.Config.Repository
-    timestamps(type: :utc_datetime)
+  postgres do
+    table "projects"
+    repo Conductor.Repo
+
+    migration_types project_owner: :string,
+                    runner_login: :string,
+                    pickup_status: :string,
+                    active_status: :string,
+                    handoff_status: :string,
+                    done_status: :string,
+                    item_filter: :string,
+                    project_number: :integer
+
+    migration_defaults inserted_at: "nil", updated_at: "nil"
+
+    references do
+      reference :repo, on_delete: :restrict
+    end
+
+    identity_index_names repo_id_project_owner_project_number:
+                           "projects_repo_id_project_owner_project_number_index"
+
+    foreign_key_names [
+      {:project_number, "runs_project_id_fkey", "has runs and cannot be deleted"}
+    ]
   end
 
-  def changeset(project, attrs) do
-    project
-    |> cast(attrs, [
-      :project_owner,
-      :project_number,
-      :runner_login,
-      :pickup_status,
-      :active_status,
-      :handoff_status,
-      :done_status,
-      :item_filter,
-      :enabled,
-      :repo_id
-    ])
-    |> validate_required([
-      :project_owner,
-      :project_number,
-      :runner_login,
-      :pickup_status,
-      :active_status,
-      :handoff_status,
-      :done_status,
-      :repo_id
-    ])
-    |> validate_number(:project_number, greater_than: 0)
-    |> unique_constraint([:repo_id, :project_owner, :project_number],
-      error_key: :project_number,
-      message: "is already configured for this repository"
-    )
-    |> foreign_key_constraint(:repo_id)
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+
+    read :enabled do
+      filter expr(enabled == true)
+      prepare build(load: [:repo])
+    end
+  end
+
+  validations do
+    validate numericality(:project_number, greater_than: 0)
+  end
+
+  attributes do
+    integer_primary_key :id
+
+    attribute :project_owner, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :runner_login, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :pickup_status, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :active_status, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :handoff_status, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :done_status, :string do
+      public? true
+      allow_nil? false
+      default "Done"
+    end
+
+    attribute :project_number, :integer do
+      public? true
+      allow_nil? false
+      default 0
+    end
+
+    attribute :item_filter, :string do
+      public? true
+    end
+
+    attribute :enabled, :boolean do
+      public? true
+      allow_nil? false
+      default true
+    end
+
+    create_timestamp :inserted_at, type: :utc_datetime
+    update_timestamp :updated_at, type: :utc_datetime
+  end
+
+  relationships do
+    belongs_to :repo, Conductor.Config.Repository do
+      attribute_type :integer
+      allow_nil? false
+      public? true
+    end
+  end
+
+  identities do
+    identity :repo_id_project_owner_project_number, [:repo_id, :project_owner, :project_number] do
+      field_names [:project_number]
+      message "is already configured for this repository"
+    end
   end
 end

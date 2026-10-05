@@ -4,47 +4,179 @@ defmodule Conductor.Runs.Run do
 
   Status: `picked_up → provisioning → running ⇄ waiting_for_input → handing_off → completed | failed`.
   """
-  use Ecto.Schema
-  import Ecto.Changeset
+  use Ash.Resource,
+    domain: Conductor.Runs,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStateMachine],
+    notifiers: [Conductor.Runs.Notifier]
 
-  @statuses ~w(picked_up provisioning running waiting_for_input handing_off completed failed)
-  @terminal ~w(completed failed)
+  @terminal ~w(completed failed)a
 
-  @primary_key {:id, :string, autogenerate: false}
-  schema "runs" do
-    field :issue_key, :string
-    field :attempt, :integer
-    field :status, :string, default: "picked_up"
-    field :workspace_path, :string
-    field :branch, :string
-    field :issue_snapshot, :map
-    field :outcome, :string
-    field :summary, :string
-    field :error, :string
-    field :pr_url, :string
-    belongs_to :project, Conductor.Config.Project
-    has_many :questions, Conductor.Runs.Question
-    timestamps(type: :utc_datetime)
+  postgres do
+    table "runs"
+    repo Conductor.Repo
+
+    migration_types id: :string,
+                    issue_key: :string,
+                    workspace_path: :string,
+                    branch: :string,
+                    outcome: :string,
+                    pr_url: :string,
+                    status: :string,
+                    attempt: :integer
+
+    migration_defaults inserted_at: "nil", updated_at: "nil", status: "nil"
+
+    references do
+      reference :project, on_delete: :restrict
+    end
+
+    identity_index_names issue_key_attempt: "runs_issue_key_attempt_index"
+
+    custom_indexes do
+      index [:issue_key], name: "runs_issue_key_index"
+      index [:status], name: "runs_status_index"
+    end
   end
 
-  def statuses, do: @statuses
+  state_machine do
+    state_attribute :status
+    initial_states [:picked_up]
+    default_initial_state :picked_up
+
+    transitions do
+      transition :pump, from: :picked_up, to: :provisioning
+      transition :provision_end, from: :provisioning, to: :running
+      transition :wait_for_input, from: :running, to: :waiting_for_input
+      transition :resume, from: :waiting_for_input, to: :running
+      transition :settle, from: [:provisioning, :running, :waiting_for_input], to: :handing_off
+      transition :complete, from: :handing_off, to: :completed
+      transition :hand_off_failed, from: :handing_off, to: :failed
+
+      transition :abort,
+        from: [:picked_up, :provisioning, :running, :waiting_for_input],
+        to: :failed
+
+      transition :fail,
+        from: [:picked_up, :provisioning, :running, :waiting_for_input, :handing_off],
+        to: :failed
+    end
+  end
+
+  actions do
+    defaults [:read]
+
+    create :create do
+      primary? true
+      accept [:id, :issue_key, :attempt, :project_id, :issue_snapshot]
+    end
+
+    update :set_workspace_path do
+      accept [:workspace_path]
+    end
+
+    update :set_branch do
+      accept [:branch]
+    end
+
+    update :clear_workspace do
+      accept []
+      change set_attribute(:workspace_path, nil)
+    end
+
+    update :pump do
+      accept []
+      change transition_state(:provisioning)
+    end
+
+    update :provision_end do
+      accept []
+      change transition_state(:running)
+    end
+
+    update :wait_for_input do
+      accept []
+      change transition_state(:waiting_for_input)
+    end
+
+    update :resume do
+      accept []
+      change transition_state(:running)
+    end
+
+    update :settle do
+      accept [:outcome, :summary, :error]
+      change transition_state(:handing_off)
+    end
+
+    update :complete do
+      accept [:pr_url]
+      change transition_state(:completed)
+    end
+
+    update :hand_off_failed do
+      accept [:error]
+      change transition_state(:failed)
+    end
+
+    update :abort do
+      accept []
+      change set_attribute(:error, "aborted")
+      change transition_state(:failed)
+    end
+
+    update :fail do
+      accept [:error]
+      change transition_state(:failed)
+    end
+  end
+
+  attributes do
+    attribute :id, :string do
+      primary_key? true
+      allow_nil? false
+      public? true
+    end
+
+    attribute :issue_key, :string do
+      allow_nil? false
+      public? true
+    end
+
+    attribute :attempt, :integer do
+      allow_nil? false
+      public? true
+    end
+
+    attribute :issue_snapshot, :map, public?: true
+    attribute :workspace_path, :string, public?: true, constraints: [trim?: false]
+    attribute :branch, :string, public?: true, constraints: [trim?: false]
+    attribute :outcome, :string, public?: true, constraints: [trim?: false]
+    attribute :summary, :string, public?: true, constraints: [trim?: false]
+    attribute :error, :string, public?: true, constraints: [trim?: false]
+    attribute :pr_url, :string, public?: true, constraints: [trim?: false]
+    create_timestamp :inserted_at, type: :utc_datetime
+    update_timestamp :updated_at, type: :utc_datetime
+  end
+
+  relationships do
+    belongs_to :project, Conductor.Config.Project do
+      attribute_type :integer
+      allow_nil? false
+      public? true
+    end
+
+    has_many :questions, Conductor.Runs.Question do
+      public? true
+    end
+  end
+
+  identities do
+    identity :issue_key_attempt, [:issue_key, :attempt]
+  end
+
+  def statuses, do: AshStateMachine.Info.state_machine_all_states(__MODULE__)
   def terminal_statuses, do: @terminal
   def terminal?(%__MODULE__{status: status}), do: status in @terminal
-
-  def changeset(run, attrs) do
-    run
-    |> cast(attrs, [
-      :status,
-      :workspace_path,
-      :branch,
-      :issue_snapshot,
-      :outcome,
-      :summary,
-      :error,
-      :pr_url
-    ])
-    |> validate_inclusion(:status, @statuses)
-  end
-
   def id_for(issue_key, attempt), do: "#{issue_key}-#{attempt}"
 end

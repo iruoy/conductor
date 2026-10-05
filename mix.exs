@@ -8,6 +8,7 @@ defmodule Conductor.MixProject do
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      consolidate_protocols: Mix.env() != :dev,
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
@@ -40,6 +41,12 @@ defmodule Conductor.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:ash, "~> 3.34"},
+      {:ash_postgres, "~> 2.14"},
+      {:ash_phoenix, "~> 2.3"},
+      {:ash_state_machine, "~> 0.2.13"},
+      {:picosat_elixir, "~> 0.2.3"},
+      {:sourceror, "~> 1.8", only: [:dev, :test]},
       {:phoenix, "~> 1.8.8"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
@@ -87,7 +94,13 @@ defmodule Conductor.MixProject do
         "esbuild conductor --minify",
         "phx.digest"
       ],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "ash.codegen --check",
+        "test"
+      ]
     ]
   end
 end

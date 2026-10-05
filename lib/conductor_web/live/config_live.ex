@@ -2,6 +2,7 @@ defmodule ConductorWeb.ConfigLive do
   use ConductorWeb, :live_view
   alias Conductor.{Config, GitHub, Runner}
   alias Conductor.Config.{Project, Repository, Settings}
+  alias AshPhoenix.Form
 
   @impl true
   def mount(_params, _session, socket) do
@@ -40,15 +41,14 @@ defmodule ConductorWeb.ConfigLive do
           <span>Could not list models from the runner ({@models_error}); showing the saved choices only.</span>
         </div>
         <div class="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-          <div :for={role <- Settings.roles()} class="flex items-end gap-2">
+          <div :for={{role, model_form} <- @model_forms} class="flex items-end gap-2">
             <div class="grow">
               <.input
                 type="select"
                 id={"model-#{role}"}
-                name={"settings[models][#{role}][model]"}
+                field={model_form[:model]}
                 label={"#{String.capitalize(role)} model"}
-                value={model_value(@model_choices[role])}
-                options={model_options(@models, @model_choices[role])}
+                options={model_options(@models, model_form[:model].value)}
                 prompt={if role == "head", do: "Choose a model", else: "Same as head"}
               />
             </div>
@@ -56,7 +56,7 @@ defmodule ConductorWeb.ConfigLive do
               <.input
                 type="select"
                 id={"reasoning-#{role}"}
-                name={"settings[models][#{role}][reasoning]"}
+                field={model_form[:reasoning]}
                 label="Reasoning"
                 value={reasoning_value(@model_defaults, @model_choices[role])}
                 options={reasoning_options(@models, @model_choices[role])}
@@ -350,7 +350,7 @@ defmodule ConductorWeb.ConfigLive do
 
   @impl true
   def handle_event("change_settings", %{"settings" => params} = event, socket) do
-    choices = model_choices(params)
+    choices = params["models"] || %{}
 
     # A newly chosen model starts at its own default reasoning level.
     choices =
@@ -362,29 +362,26 @@ defmodule ConductorWeb.ConfigLive do
           choices
       end
 
-    socket = load_model_defaults(socket, choices)
+    models = decode_models(choices)
+    attrs = Map.put(params, "models", models)
+    form = Form.validate(socket.assigns.settings_form, attrs)
 
-    changeset =
-      Config.change_settings(
-        socket.assigns.settings,
-        Map.take(params, ["max_concurrent", "prune_days"])
-      )
-
-    {:noreply, assign(socket, model_choices: choices, settings_form: to_form(changeset))}
+    {:noreply,
+     socket
+     |> load_model_defaults(models)
+     |> assign_settings_form(form, choices)}
   end
 
   def handle_event("save_settings", %{"settings" => params}, socket) do
-    attrs =
-      Map.take(params, ["max_concurrent", "prune_days"])
-      |> Map.put("models", model_choices(params))
+    attrs = Map.put(params, "models", decode_models(params["models"] || %{}))
 
-    case Config.update_settings(socket.assigns.settings, attrs) do
+    case Form.submit(socket.assigns.settings_form, params: attrs) do
       {:ok, settings} ->
         if Process.whereis(Conductor.Coordinator), do: Conductor.Coordinator.pump()
         {:noreply, socket |> assign_settings(settings) |> put_flash(:info, "Settings saved")}
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, settings_form: to_form(changeset))}
+      {:error, form} ->
+        {:noreply, assign_settings_form(socket, form, params["models"])}
     end
   end
 
@@ -395,7 +392,7 @@ defmodule ConductorWeb.ConfigLive do
 
     {:noreply,
      socket
-     |> assign(repo: repo, repo_form: to_form(Config.change_repo(repo)))
+     |> assign(repo: repo, repo_form: resource_form(repo, "repository"))
      |> load_github_repos()}
   end
 
@@ -408,17 +405,11 @@ defmodule ConductorWeb.ConfigLive do
         else: params
 
     {:noreply,
-     assign(socket, repo_form: to_form(Config.change_repo(socket.assigns.repo, params)))}
+     assign(socket, repo_form: socket.assigns.repo_form |> Form.validate(params) |> to_form())}
   end
 
   def handle_event("save_repo", %{"repository" => params}, socket) do
-    result =
-      case socket.assigns.repo do
-        %Repository{id: nil} -> Config.create_repo(params)
-        repo -> Config.update_repo(repo, params)
-      end
-
-    case result do
+    case Form.submit(socket.assigns.repo_form, params: params) do
       {:ok, repo} ->
         {:noreply,
          socket
@@ -426,8 +417,8 @@ defmodule ConductorWeb.ConfigLive do
          |> load_lists()
          |> put_flash(:info, "Saved #{repo.name}")}
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, repo_form: to_form(changeset))}
+      {:error, form} ->
+        {:noreply, assign(socket, repo_form: to_form(form))}
     end
   end
 
@@ -449,7 +440,7 @@ defmodule ConductorWeb.ConfigLive do
         else: Config.get_project!(id)
 
     {:noreply,
-     socket |> assign(project: project) |> assign_project_form(Config.change_project(project))}
+     socket |> assign(project: project) |> assign_project_form(resource_form(project, "project"))}
   end
 
   def handle_event("change_project", %{"project" => params} = event, socket) do
@@ -458,20 +449,14 @@ defmodule ConductorWeb.ConfigLive do
         do: Map.merge(params, chosen_project(socket.assigns.github_projects, params["github"])),
         else: params
 
-    {:noreply, assign_project_form(socket, Config.change_project(socket.assigns.project, params))}
+    {:noreply, assign_project_form(socket, Form.validate(socket.assigns.project_form, params))}
   end
 
   def handle_event("cancel_project", _params, socket),
     do: {:noreply, assign(socket, project_form: nil)}
 
   def handle_event("save_project", %{"project" => params}, socket) do
-    result =
-      case socket.assigns.project do
-        %Project{id: nil} -> Config.create_project(params)
-        project -> Config.update_project(project, params)
-      end
-
-    case result do
+    case Form.submit(socket.assigns.project_form, params: params) do
       {:ok, project} ->
         {:noreply,
          socket
@@ -479,8 +464,8 @@ defmodule ConductorWeb.ConfigLive do
          |> load_lists()
          |> put_flash(:info, "Saved #{project.project_owner}/#{project.project_number}")}
 
-      {:error, changeset} ->
-        {:noreply, assign_project_form(socket, changeset)}
+      {:error, form} ->
+        {:noreply, assign_project_form(socket, form)}
     end
   end
 
@@ -497,21 +482,67 @@ defmodule ConductorWeb.ConfigLive do
   ## Helpers
 
   defp assign_settings(socket, settings) do
+    socket
+    |> assign(settings: settings)
+    |> assign_settings_form(Form.for_update(settings, :update, as: "settings"))
+  end
+
+  defp resource_form(%{id: nil} = record, name) do
+    record.__struct__
+    |> Form.for_create(:create, as: name, prepare_source: &Map.put(&1, :data, record))
+    |> to_form()
+  end
+
+  defp resource_form(record, name),
+    do: record |> Form.for_update(:update, as: name) |> to_form()
+
+  # Models is a custom Ash map type rather than an embedded resource. Give each
+  # typed role choice its own Phoenix form, deriving names from the parent field.
+  # Only the select boundary uses provider/model; the action receives the typed map.
+  defp assign_settings_form(socket, form, choices \\ nil) do
+    form = to_form(form)
+    models = Form.value(form, :models) || %{}
+
+    model_forms =
+      for role <- Settings.roles() do
+        choice = models[role] || %{}
+
+        params =
+          (choices || %{})[role] ||
+            %{
+              "model" => model_value(choice),
+              "reasoning" => choice["reasoning"]
+            }
+
+        {role, to_form(params, as: "#{form[:models].name}[#{role}]", id: "model-choice-#{role}")}
+      end
+
     assign(socket,
-      settings: settings,
-      model_choices: settings.models,
-      settings_form: to_form(Config.change_settings(settings))
+      settings_form: form,
+      model_forms: model_forms,
+      model_choices: if(choices, do: decode_models(choices), else: models)
     )
   end
 
-  # The model choices of the settings form's params, per role.
-  defp model_choices(params) do
-    for {role, %{"model" => model} = choice} <- params["models"] || %{},
-        model != "",
-        into: %{} do
-      [provider, model_id] = String.split(model, "/", parts: 2)
-      {role, %{"provider" => provider, "modelId" => model_id, "reasoning" => choice["reasoning"]}}
-    end
+  defp decode_models(choices) do
+    models =
+      for {role, choice} <- choices, into: %{} do
+        value = choice["model"] || ""
+
+        model =
+          case String.split(value, "/", parts: 2) do
+            [provider, id] ->
+              %{"provider" => provider, "modelId" => id, "reasoning" => choice["reasoning"]}
+
+            _ ->
+              %{}
+          end
+
+        {role, model}
+      end
+
+    {:ok, models} = Ash.Type.cast_input(Conductor.Config.Models, models)
+    models
   end
 
   # The runner's entry for a model choice: its reasoning levels and default come from there.
@@ -594,9 +625,9 @@ defmodule ConductorWeb.ConfigLive do
   end
 
   # The form with the GitHub project it points at: the one selected in the list, and its statuses to choose from.
-  defp assign_project_form(socket, changeset) do
-    owner = Ecto.Changeset.get_field(changeset, :project_owner)
-    number = Ecto.Changeset.get_field(changeset, :project_number)
+  defp assign_project_form(socket, form) do
+    owner = Form.value(form, :project_owner)
+    number = Form.value(form, :project_number)
 
     github_project =
       Enum.find(socket.assigns.github_projects || [], fn project ->
@@ -605,7 +636,7 @@ defmodule ConductorWeb.ConfigLive do
       end)
 
     assign(socket,
-      project_form: to_form(changeset),
+      project_form: to_form(form),
       project_pick: github_project && project_key(github_project),
       project_statuses: github_project && github_project["statuses"]
     )
@@ -652,10 +683,10 @@ defmodule ConductorWeb.ConfigLive do
     end
   end
 
-  defp model_value(nil), do: nil
-  defp model_value(choice), do: "#{choice["provider"]}/#{choice["modelId"]}"
+  defp model_value(%{"provider" => provider, "modelId" => id}), do: "#{provider}/#{id}"
+  defp model_value(_), do: nil
 
-  defp model_options(models, current) do
+  defp model_options(models, saved) do
     options =
       models
       |> Enum.group_by(& &1["provider"])
@@ -667,7 +698,6 @@ defmodule ConductorWeb.ConfigLive do
          |> Enum.map(&{&1["name"] || &1["id"], "#{provider}/#{&1["id"]}"})}
       end)
 
-    saved = model_value(current)
     listed? = Enum.any?(options, fn {_, opts} -> Enum.any?(opts, &(elem(&1, 1) == saved)) end)
     if saved && not listed?, do: [{"saved", [{saved, saved}]} | options], else: options
   end

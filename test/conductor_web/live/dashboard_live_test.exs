@@ -15,7 +15,7 @@ defmodule ConductorWeb.DashboardLiveTest do
   end
 
   test "lists runs, streams the live log, and retries", %{conn: conn, project: project} do
-    run = run_fixture(project, "shop-1", %{status: "failed", error: "boom"})
+    run = run_fixture(project, "shop-1", %{status: :failed, error: "boom"})
     {:ok, view, html} = live(conn, ~p"/")
     assert html =~ "shop-1-1"
     assert html =~ "boom"

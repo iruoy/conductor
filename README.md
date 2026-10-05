@@ -1,7 +1,7 @@
 # Conductor
 
 Picks GitHub issues assigned to a runner account, works them with a durable coding agent in a git working tree, and
-opens a pull request when the agent is done. Phoenix LiveView for the UI, a Node
+opens a pull request when the agent is done. Ash resources and domains for application data and the run status state machine (`Conductor.Runs.Run`), Phoenix LiveView for the UI, a Node
 [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable) runner for the agent, and PostgreSQL for Conductor's application data.
 
 ```
@@ -25,6 +25,14 @@ cd runner && pnpm install && pnpm build && cd ..
 mix setup
 mix phx.server   # http://localhost:4000
 ```
+
+### Upgrading an existing database
+
+Run `mix ecto.migrate` (or the release's migration command) before starting the upgraded app.
+The original `20261004212747_init` migration is retained unchanged: the Ash migration
+only adds the unique run identity on `(issue_key, attempt)`, preserving existing tables and data.
+Existing duplicate run attempts must be reconciled before applying that unique index;
+the migration fails rather than deleting or rewriting historical runs.
 
 Models come from pi-ai: the OpenAI subscription login in `~/.pi/agent/auth.json` (log in with `pi`; refreshes are
 shared with it through the same file lock), plus any provider whose API key is in the environment

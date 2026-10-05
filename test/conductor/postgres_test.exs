@@ -3,19 +3,19 @@ defmodule Conductor.PostgresTest do
   import Conductor.Fixtures
   alias Conductor.{Config, Runs}
 
-  test "repository deletion returns a changeset error when a project references it" do
+  test "repository deletion returns a Ash error when a project references it" do
     project = project_fixture()
 
-    assert {:error, changeset} = Config.delete_repo(project.repo)
-    assert errors_on(changeset) == %{name: ["is used by a project"]}
+    assert {:error, %Ash.Error.Invalid{} = error} = Config.delete_repo(project.repo)
+    assert errors_on(error) == %{name: ["is used by a project"]}
   end
 
-  test "project deletion returns a changeset error when a run references it" do
+  test "project deletion returns a Ash error when a run references it" do
     project = project_fixture()
     run_fixture(project, "SHOP-1")
 
-    assert {:error, changeset} = Config.delete_project(project)
-    assert errors_on(changeset) == %{project_number: ["has runs and cannot be deleted"]}
+    assert {:error, %Ash.Error.Invalid{} = error} = Config.delete_project(project)
+    assert errors_on(error) == %{project_number: ["has runs and cannot be deleted"]}
   end
 
   test "event upserts replace payloads and conversations follow their first event id" do

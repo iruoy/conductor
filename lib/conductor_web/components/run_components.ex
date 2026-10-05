@@ -3,20 +3,20 @@ defmodule ConductorWeb.RunComponents do
   use Phoenix.Component
   import ConductorWeb.CoreComponents, only: [icon: 1]
 
-  attr :status, :string, required: true
+  attr :status, :atom, required: true
 
   def status_badge(assigns) do
     ~H"""
     <span class={["badge badge-sm whitespace-nowrap", badge_class(@status)]}>
-      {String.replace(@status, "_", " ")}
+      {String.replace(to_string(@status), "_", " ")}
     </span>
     """
   end
 
-  defp badge_class("completed"), do: "badge-success"
-  defp badge_class("failed"), do: "badge-error"
-  defp badge_class("waiting_for_input"), do: "badge-warning"
-  defp badge_class(status) when status in ~w(running provisioning handing_off), do: "badge-info"
+  defp badge_class(:completed), do: "badge-success"
+  defp badge_class(:failed), do: "badge-error"
+  defp badge_class(:waiting_for_input), do: "badge-warning"
+  defp badge_class(status) when status in ~w(running provisioning handing_off)a, do: "badge-info"
   defp badge_class(_), do: "badge-ghost"
 
   @doc "The DOM id of a persisted or live transcript item."

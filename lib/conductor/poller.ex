@@ -83,7 +83,7 @@ defmodule Conductor.Poller do
   def prune do
     for run <- Runs.list_prunable(Config.get_settings().prune_days) do
       Workspace.remove(run.workspace_path)
-      Runs.update_run(run, %{workspace_path: nil})
+      Runs.clear_workspace(run)
     end
 
     :ok

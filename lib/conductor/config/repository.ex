@@ -1,34 +1,72 @@
 defmodule Conductor.Config.Repository do
-  @moduledoc "A git repository Conductor works in, hosted on GitHub."
-  use Ecto.Schema
-  import Ecto.Changeset
+  @moduledoc "Repository configuration stored in the existing repos table."
+  use Ash.Resource, domain: Conductor.Config, data_layer: AshPostgres.DataLayer
 
-  schema "repos" do
-    field :name, :string
-    field :clone_url, :string
-    field :owner, :string
-    field :slug, :string
-    field :base_branch, :string
-    field :setup_script, :string
-    field :test_command, :string
-    timestamps(type: :utc_datetime)
+  postgres do
+    table "repos"
+    repo Conductor.Repo
+
+    migration_types name: :string,
+                    clone_url: :string,
+                    owner: :string,
+                    slug: :string,
+                    base_branch: :string,
+                    test_command: :string
+
+    migration_defaults inserted_at: "nil", updated_at: "nil"
+    identity_index_names name: "repos_name_index"
+    foreign_key_names [{:name, "projects_repo_id_fkey", "is used by a project"}]
   end
 
-  def changeset(repository, attrs) do
-    repository
-    |> cast(attrs, [
-      :name,
-      :clone_url,
-      :owner,
-      :slug,
-      :base_branch,
-      :setup_script,
-      :test_command
-    ])
-    |> validate_required([:name, :clone_url, :owner, :slug])
-    |> validate_format(:name, ~r/^[A-Za-z0-9._-]+$/,
+  actions do
+    defaults [:read, :destroy, create: :*, update: :*]
+  end
+
+  validations do
+    validate match(:name, ~r/^[A-Za-z0-9._-]+$/),
       message: "letters, digits, dots, dashes and underscores only"
-    )
-    |> unique_constraint(:name)
+  end
+
+  attributes do
+    integer_primary_key :id
+
+    attribute :name, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :clone_url, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :owner, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :slug, :string do
+      public? true
+      allow_nil? false
+    end
+
+    attribute :base_branch, :string do
+      public? true
+    end
+
+    attribute :setup_script, :string do
+      public? true
+    end
+
+    attribute :test_command, :string do
+      public? true
+    end
+
+    create_timestamp :inserted_at, type: :utc_datetime
+    update_timestamp :updated_at, type: :utc_datetime
+  end
+
+  identities do
+    identity :name, [:name], message: "has already been taken"
   end
 end

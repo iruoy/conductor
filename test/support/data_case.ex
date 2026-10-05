@@ -20,8 +20,6 @@ defmodule Conductor.DataCase do
     quote do
       alias Conductor.Repo
 
-      import Ecto
-      import Ecto.Changeset
       import Ecto.Query
       import Conductor.DataCase
     end
@@ -40,19 +38,17 @@ defmodule Conductor.DataCase do
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end
 
-  @doc """
-  A helper that transforms changeset errors into a map of messages.
+  @doc "Groups native Ash errors by field for assertions."
+  def errors_on(%Ash.Error.Invalid{errors: errors}) do
+    errors
+    |> Enum.flat_map(&List.wrap(AshPhoenix.FormData.Error.to_form_error(&1)))
+    |> Enum.reduce(%{}, fn {field, message, opts}, result ->
+      message =
+        Regex.replace(~r"%{(\\w+)}", message, fn _, key ->
+          opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+        end)
 
-      assert {:error, changeset} = Accounts.create_user(%{password: "short"})
-      assert "password is too short" in errors_on(changeset).password
-      assert %{password: ["password is too short"]} = errors_on(changeset)
-
-  """
-  def errors_on(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
-      Regex.replace(~r"%{(\w+)}", message, fn _, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
+      Map.update(result, field, [message], &(&1 ++ [message]))
     end)
   end
 end
