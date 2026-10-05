@@ -55,6 +55,18 @@ defmodule ConductorWeb.ConfigLiveTest do
     # Model choices come from the runner.
     assert render(view) =~ "Faux 1"
 
+    # Choosing a model offers its reasoning levels and selects its default one.
+    view
+    |> form("#settings-form", settings: %{models: %{head: %{model: "faux/faux-1"}}})
+    |> render_change(%{"_target" => ["settings", "models", "head", "model"]})
+
+    assert has_element?(view, "#reasoning-head option[value=high][selected]")
+    assert has_element?(view, "#reasoning-head option[value=low]")
+    refute has_element?(view, "#reasoning-head option[value=medium]")
+    # A chosen model always has a level; only a role without a model can leave it unset.
+    refute has_element?(view, "#reasoning-head option[value='']")
+    assert has_element?(view, "#reasoning-low option[value='']")
+
     view
     |> form("#settings-form",
       settings: %{

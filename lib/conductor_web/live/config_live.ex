@@ -3,15 +3,13 @@ defmodule ConductorWeb.ConfigLive do
   alias Conductor.{Config, GitHub, Runner}
   alias Conductor.Config.{Project, Repository, Settings}
 
-  @reasoning ~w(off minimal low medium high xhigh)
-
   @impl true
   def mount(_params, _session, socket) do
     settings = Config.get_settings()
 
     {:ok,
      socket
-     |> assign(page_title: "Config", reasoning: @reasoning, models: [], models_error: nil)
+     |> assign(page_title: "Config", models: [], models_error: nil, model_defaults: %{})
      |> assign_settings(settings)
      |> assign(repo_form: nil, github_repos: nil, github_repos_error: nil)
      |> assign(project_form: nil, github_projects: nil, github_projects_error: nil)
@@ -30,7 +28,13 @@ defmodule ConductorWeb.ConfigLive do
         </:subtitle>
       </.header>
 
-      <.form for={@settings_form} id="settings-form" phx-submit="save_settings" class="space-y-4">
+      <.form
+        for={@settings_form}
+        id="settings-form"
+        phx-change="change_settings"
+        phx-submit="save_settings"
+        class="space-y-4"
+      >
         <div :if={@models_error} role="alert" class="alert alert-warning alert-soft">
           <.icon name="hero-exclamation-triangle" class="size-5" />
           <span>Could not list models from the runner ({@models_error}); showing the saved choices only.</span>
@@ -43,8 +47,8 @@ defmodule ConductorWeb.ConfigLive do
                 id={"model-#{role}"}
                 name={"settings[models][#{role}][model]"}
                 label={"#{String.capitalize(role)} model"}
-                value={model_value(@settings.models[role])}
-                options={model_options(@models, @settings.models[role])}
+                value={model_value(@model_choices[role])}
+                options={model_options(@models, @model_choices[role])}
                 prompt={if role == "head", do: "Choose a model", else: "Same as head"}
               />
             </div>
@@ -54,9 +58,11 @@ defmodule ConductorWeb.ConfigLive do
                 id={"reasoning-#{role}"}
                 name={"settings[models][#{role}][reasoning]"}
                 label="Reasoning"
-                value={(@settings.models[role] || %{})["reasoning"]}
-                options={@reasoning}
-                prompt="default"
+                value={reasoning_value(@model_defaults, @model_choices[role])}
+                options={reasoning_options(@models, @model_choices[role])}
+                prompt={
+                  if reasoning_value(@model_defaults, @model_choices[role]), do: nil, else: "default"
+                }
               />
             </div>
           </div>
@@ -343,18 +349,34 @@ defmodule ConductorWeb.ConfigLive do
   ## Settings
 
   @impl true
-  def handle_event("save_settings", %{"settings" => params}, socket) do
-    models =
-      for {role, %{"model" => model} = choice} <- params["models"] || %{},
-          model != "",
-          into: %{} do
-        [provider, model_id] = String.split(model, "/", parts: 2)
+  def handle_event("change_settings", %{"settings" => params} = event, socket) do
+    choices = model_choices(params)
 
-        {role,
-         %{"provider" => provider, "modelId" => model_id, "reasoning" => choice["reasoning"]}}
+    # A newly chosen model starts at its own default reasoning level.
+    choices =
+      case event["_target"] do
+        ["settings", "models", role, "model"] when is_map_key(choices, role) ->
+          Map.update!(choices, role, &Map.put(&1, "reasoning", nil))
+
+        _ ->
+          choices
       end
 
-    attrs = Map.take(params, ["max_concurrent", "prune_days"]) |> Map.put("models", models)
+    socket = load_model_defaults(socket, choices)
+
+    changeset =
+      Config.change_settings(
+        socket.assigns.settings,
+        Map.take(params, ["max_concurrent", "prune_days"])
+      )
+
+    {:noreply, assign(socket, model_choices: choices, settings_form: to_form(changeset))}
+  end
+
+  def handle_event("save_settings", %{"settings" => params}, socket) do
+    attrs =
+      Map.take(params, ["max_concurrent", "prune_days"])
+      |> Map.put("models", model_choices(params))
 
     case Config.update_settings(socket.assigns.settings, attrs) do
       {:ok, settings} ->
@@ -475,7 +497,65 @@ defmodule ConductorWeb.ConfigLive do
   ## Helpers
 
   defp assign_settings(socket, settings) do
-    assign(socket, settings: settings, settings_form: to_form(Config.change_settings(settings)))
+    assign(socket,
+      settings: settings,
+      model_choices: settings.models,
+      settings_form: to_form(Config.change_settings(settings))
+    )
+  end
+
+  # The model choices of the settings form's params, per role.
+  defp model_choices(params) do
+    for {role, %{"model" => model} = choice} <- params["models"] || %{},
+        model != "",
+        into: %{} do
+      [provider, model_id] = String.split(model, "/", parts: 2)
+      {role, %{"provider" => provider, "modelId" => model_id, "reasoning" => choice["reasoning"]}}
+    end
+  end
+
+  # The runner's entry for a model choice: its reasoning levels and default come from there.
+  defp listed_model(_models, nil), do: nil
+
+  defp listed_model(models, choice) do
+    Enum.find(models, &(&1["provider"] == choice["provider"] and &1["id"] == choice["modelId"]))
+  end
+
+  # The level of a choice: the saved one, or else the model's default when the provider tells it.
+  defp reasoning_value(_defaults, nil), do: nil
+
+  defp reasoning_value(defaults, choice),
+    do: choice["reasoning"] || defaults[model_value(choice)]
+
+  # Asks the runner for the default level of every chosen model that has no level yet.
+  defp load_model_defaults(socket, choices) do
+    wanted =
+      for {_role, choice} <- choices,
+          choice["reasoning"] in [nil, ""],
+          not is_map_key(socket.assigns.model_defaults, model_value(choice)),
+          uniq: true,
+          do: choice
+
+    defaults =
+      for choice <- wanted, into: socket.assigns.model_defaults do
+        command = %{
+          type: "model_default",
+          provider: choice["provider"],
+          model_id: choice["modelId"]
+        }
+
+        case Runner.call(command, 15_000) do
+          {:ok, level} -> {model_value(choice), level}
+          {:error, _reason} -> {model_value(choice), nil}
+        end
+      end
+
+    assign(socket, model_defaults: defaults)
+  end
+
+  defp reasoning_options(models, choice) do
+    levels = (listed_model(models, choice) || %{})["levels"] || []
+    Enum.uniq(levels ++ List.wrap((choice || %{})["reasoning"])) -- [""]
   end
 
   defp load_lists(socket),
@@ -553,8 +633,13 @@ defmodule ConductorWeb.ConfigLive do
   defp load_models(socket) do
     if connected?(socket) do
       case Runner.call(%{type: "models"}, 15_000) do
-        {:ok, models} -> assign(socket, models: models, models_error: nil)
-        {:error, reason} -> assign(socket, models_error: inspect(reason))
+        {:ok, models} ->
+          socket
+          |> assign(models: models, models_error: nil)
+          |> load_model_defaults(socket.assigns.model_choices)
+
+        {:error, reason} ->
+          assign(socket, models_error: inspect(reason))
       end
     else
       socket

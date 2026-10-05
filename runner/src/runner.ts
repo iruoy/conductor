@@ -3,7 +3,7 @@
 import { isAbsolute } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Models, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	type AgentEvent,
 	type AgentEventStream,
@@ -20,6 +20,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { agentChoice, answerText, createConductorExtensions, type GithubConfig, githubFromEnv } from "./agent.ts";
+import { probeDefaultLevel } from "./defaults.ts";
 import { type GithubRun, type ModelMap, type RunRecord, RunsDoc, type Settled } from "./state.ts";
 
 export const VERSION = "0.1.0";
@@ -48,6 +49,7 @@ export class Runner {
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly tracking = new Set<string>();
 	private readonly streams = new Map<string, Map<number, AgentEventStream>>();
+	private readonly defaults = new Map<string, ModelThinkingLevel>();
 	private resumed: string[] = [];
 	private closed = false;
 
@@ -98,6 +100,8 @@ export class Runner {
 				return { version: VERSION, resumed: this.resumed };
 			case "models":
 				return this.listModels();
+			case "model_default":
+				return this.modelDefault(command);
 			case "start_run":
 				return this.startRun(command);
 			case "answer":
@@ -136,10 +140,20 @@ export class Runner {
 			id: m.id,
 			name: m.name,
 			reasoning: m.reasoning,
-			levels: m.reasoning
-				? ["minimal", "low", "medium", "high", "xhigh"].filter((l) => (m.thinkingLevelMap as Record<string, unknown> | undefined)?.[l] !== null)
-				: [],
+			levels: getSupportedThinkingLevels(m),
 		}));
+	}
+
+	/** The level the model reasons at by default, asked from the provider once per model; null when it does not tell. */
+	private async modelDefault(command: Command) {
+		const key = `${str(command, "provider")}/${str(command, "model_id")}`;
+		const model = this.models.getModel(str(command, "provider"), str(command, "model_id"));
+		if (model === undefined) throw new ProtocolError(`model_default: unknown model ${key}`);
+		const known = this.defaults.get(key);
+		if (known !== undefined) return known;
+		const level = await probeDefaultLevel(this.models, model).catch(() => null);
+		if (level !== null) this.defaults.set(key, level);
+		return level;
 	}
 
 	private startRun(command: Command) {
