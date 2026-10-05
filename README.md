@@ -1,7 +1,7 @@
 # Conductor
 
 Picks GitHub issues assigned to a runner account, works them with a durable coding agent in a git working tree, and
-opens a pull request when the agent is done. Phoenix LiveView for the UI, a Node
+opens a pull request when the agent is done. Ash resources and domains for application data and the run status state machine (`Conductor.Runs.Run`), Phoenix LiveView for the UI, a Node
 [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable) runner for the agent, and PostgreSQL for Conductor's application data.
 
 ```

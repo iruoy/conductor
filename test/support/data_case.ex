@@ -20,8 +20,6 @@ defmodule Conductor.DataCase do
     quote do
       alias Conductor.Repo
 
-      import Ecto
-      import Ecto.Changeset
       import Ecto.Query
       import Conductor.DataCase
     end
