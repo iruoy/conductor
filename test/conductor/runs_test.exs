@@ -3,7 +3,7 @@ defmodule Conductor.RunsTest do
   import Conductor.Fixtures
   alias Conductor.Runs
 
-  test "messages, tool starts and notes retain their first-persisted order" do
+  test "messages, tool starts and notes are ordered by conversation, position and id" do
     run = run_fixture(project_fixture(), "SHOP-1")
     user = %{"id" => 1, "kind" => "pi.user"}
     assistant = %{"id" => 2, "kind" => "pi.assistant"}
@@ -22,21 +22,20 @@ defmodule Conductor.RunsTest do
     ingest(run, %{"type" => "message_end", "entry" => result})
     Runs.record_note(run.id, "finished", %{"text" => "Finished"})
 
-    # Both a note and a tool start have NULL positions. They must not be grouped
-    # before or after all messages, even when the timestamps are identical.
+    # Notes belong to conversation 0; NULL positions sort after positioned messages.
     assert Enum.map(Runs.list_events(run.id), & &1.entry) == [
+             "n:finished",
              "e:1",
              "e:2",
-             "t:call-1",
              "e:3",
-             "n:finished"
+             "t:call-1"
            ]
 
     assert Enum.map(Runs.list_events(run.id, 1), & &1.entry) == [
              "e:1",
              "e:2",
-             "t:call-1",
-             "e:3"
+             "e:3",
+             "t:call-1"
            ]
   end
 
@@ -62,13 +61,75 @@ defmodule Conductor.RunsTest do
 
     after_replay = Runs.list_events(run.id, 1)
     assert Enum.map(after_replay, & &1.id) == Enum.map(before, & &1.id)
-    assert Enum.map(after_replay, & &1.entry) == ["e:1", "e:2", "t:call-1", "e:3"]
+    assert Enum.map(after_replay, & &1.entry) == ["e:1", "e:2", "e:3", "t:call-1"]
     assert Enum.find(after_replay, &(&1.entry == "e:2")).payload == updated
   end
 
-  test "Run and Question are registered Ash resources over the existing tables" do
+  test "replaying a snapshot twice is unique and uses one SQL statement per chunk" do
+    run = run_fixture(project_fixture(), "SHOP-12")
+    entries = for id <- 1..201, do: %{"id" => id, "kind" => "pi.assistant"}
+    system = %{"id" => 0, "kind" => "pi.system"}
+    handler = "transcript-queries-#{System.unique_integer([:positive])}"
+    owner = self()
+
+    :telemetry.attach(
+      handler,
+      [:conductor, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        if self() == owner, do: send(owner, {:transcript_sql, metadata.query})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    for _ <- 1..2 do
+      ingest(run, %{"type" => "snapshot", "entries" => [system | entries]})
+
+      for _ <- 1..3 do
+        assert_receive {:transcript_sql, sql}
+        assert sql =~ "INSERT INTO \"run_events\""
+        assert sql =~ "ON CONFLICT"
+      end
+
+      refute_received {:transcript_sql, _}
+    end
+
+    events = Runs.list_events(run.id, 1)
+    assert length(events) == 201
+    assert Enum.map(events, & &1.position) == Enum.to_list(1..201)
+    assert Enum.uniq_by(events, &{&1.run_id, &1.conversation, &1.entry}) == events
+    assert Enum.all?(events, &(&1.role == "head"))
+    assert Enum.all?(events, &(&1.kind == "pi.assistant"))
+    assert Runs.list_events(run.id, 0) == []
+  end
+
+  test "invalid transcript rows are logged and dropped without raising" do
+    run = run_fixture(project_fixture(), "SHOP-12")
+
+    assert ExUnit.CaptureLog.capture_log(fn ->
+             ingest(run, %{"type" => "snapshot", "entries" => [%{"id" => 1, "kind" => nil}]})
+           end) =~ "dropping transcript events"
+
+    assert Runs.list_events(run.id) == []
+    Runs.record_note(run.id, "setup", %{"text" => "ok"})
+    assert [%{conversation: 0, role: "conductor", entry: "n:setup"}] = Runs.list_events(run.id)
+  end
+
+  test "Run, Question and Event are registered Ash resources over the existing tables" do
     assert Conductor.Runs in Application.fetch_env!(:conductor, :ash_domains)
-    assert Ash.Domain.Info.resources(Runs) == [Conductor.Runs.Run, Conductor.Runs.Question]
+
+    assert Ash.Domain.Info.resources(Runs) == [
+             Conductor.Runs.Run,
+             Conductor.Runs.Question,
+             Conductor.Runs.Event
+           ]
+
+    assert AshPostgres.DataLayer.Info.table(Conductor.Runs.Event) == "run_events"
+
+    assert Ash.Resource.Info.identity(Conductor.Runs.Event, :run_id_conversation_entry).keys ==
+             [:run_id, :conversation, :entry]
+
     assert AshPostgres.DataLayer.Info.table(Conductor.Runs.Run) == "runs"
     assert AshPostgres.DataLayer.Info.table(Conductor.Runs.Question) == "questions"
     assert Ash.Resource.Info.primary_key(Conductor.Runs.Run) == [:id]

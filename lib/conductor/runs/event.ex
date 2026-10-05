@@ -3,16 +3,62 @@ defmodule Conductor.Runs.Event do
   A persisted transcript item of one conversation of a run: a finished message (`entry` = `e:<entry id>`) or a
   started tool call (`t:<call id>`). Upserted, so replays after a runner restart are harmless.
   """
-  use Ecto.Schema
+  use Ash.Resource,
+    domain: Conductor.Runs,
+    data_layer: AshPostgres.DataLayer
 
-  schema "run_events" do
-    field :run_id, :string
-    field :conversation, :integer
-    field :role, :string
-    field :entry, :string
-    field :position, :integer
-    field :kind, :string
-    field :payload, :map
-    timestamps(type: :utc_datetime, updated_at: false)
+  postgres do
+    table "run_events"
+    repo Conductor.Repo
+    identity_index_names run_id_conversation_entry: "run_events_run_id_conversation_entry_index"
+  end
+
+  actions do
+    defaults [:read]
+
+    create :create do
+      primary? true
+      accept [:run_id, :conversation, :role, :entry, :position, :kind, :payload]
+      upsert? true
+      upsert_identity :run_id_conversation_entry
+      upsert_fields [:payload, :kind, :position, :role]
+    end
+  end
+
+  attributes do
+    integer_primary_key :id
+    attribute :conversation, :integer, allow_nil?: false, public?: true
+
+    attribute :role, :string,
+      allow_nil?: false,
+      public?: true,
+      constraints: [trim?: false, allow_empty?: true]
+
+    attribute :entry, :string,
+      allow_nil?: false,
+      public?: true,
+      constraints: [trim?: false, allow_empty?: true]
+
+    attribute :position, :integer, public?: true
+
+    attribute :kind, :string,
+      allow_nil?: false,
+      public?: true,
+      constraints: [trim?: false, allow_empty?: true]
+
+    attribute :payload, :map, allow_nil?: false, public?: true
+    create_timestamp :inserted_at, type: :utc_datetime
+  end
+
+  relationships do
+    belongs_to :run, Conductor.Runs.Run do
+      attribute_type :string
+      allow_nil? false
+      public? true
+    end
+  end
+
+  identities do
+    identity :run_id_conversation_entry, [:run_id, :conversation, :entry]
   end
 end

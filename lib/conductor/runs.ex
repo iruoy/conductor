@@ -16,6 +16,7 @@ defmodule Conductor.Runs do
   resources do
     resource Run
     resource Question
+    resource Event
   end
 
   @pubsub Conductor.PubSub
@@ -129,18 +130,25 @@ defmodule Conductor.Runs do
 
   ## Transcript
 
-  # First-persisted order includes tool starts and notes, which have no runner position.
-  # Upserts preserve the row id, so replaying a snapshot does not move existing events.
+  # Row ids break ties for entries without a runner position and are preserved on replay.
   def list_events(run_id, conversation \\ nil) do
     query =
-      from e in Event, where: e.run_id == ^run_id, order_by: e.id
+      Event
+      |> Ash.Query.filter(run_id == ^run_id)
+      |> Ash.Query.sort([:conversation, :position, :id])
 
-    query = if conversation, do: where(query, [e], e.conversation == ^conversation), else: query
-    Repo.all(query)
+    query =
+      if is_nil(conversation),
+        do: query,
+        else: Ash.Query.filter(query, conversation == ^conversation)
+
+    Ash.read!(query)
   end
 
   @doc "The run's conversations as `{conversation, role}`, the head first."
   def conversations(run_id) do
+    # This small grouped Ecto query over the Ash resource returns only conversation/role
+    # pairs ordered by first appearance, without loading the entire transcript into memory.
     Repo.all(
       from e in Event,
         where: e.run_id == ^run_id,
@@ -221,8 +229,7 @@ defmodule Conductor.Runs do
       entry: entry,
       position: position,
       kind: kind,
-      payload: payload,
-      inserted_at: DateTime.utc_now(:second)
+      payload: payload
     }
   end
 
@@ -232,10 +239,19 @@ defmodule Conductor.Runs do
     |> Enum.reject(&(&1.kind == "pi.system"))
     |> Enum.chunk_every(100)
     |> Enum.each(fn chunk ->
-      Repo.insert_all(Event, chunk,
-        on_conflict: {:replace, [:payload, :kind, :position, :role]},
-        conflict_target: [:run_id, :conversation, :entry]
-      )
+      result =
+        Ash.bulk_create(chunk, Event, :create,
+          batch_size: 100,
+          transaction: false,
+          return_records?: false,
+          return_errors?: true,
+          notify?: false,
+          return_notifications?: false
+        )
+
+      if result.error_count > 0 do
+        Logger.warning("dropping transcript events: #{inspect(result.errors)}")
+      end
     end)
   rescue
     error -> Logger.warning("dropping transcript events: #{Exception.message(error)}")
