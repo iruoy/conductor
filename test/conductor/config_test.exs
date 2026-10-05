@@ -32,16 +32,18 @@ defmodule Conductor.ConfigTest do
     assert repo.base_branch == "main"
     assert repo.setup_script == "echo ready"
 
-    assert {:error, changeset} = Config.create_repo(%{})
-    assert Map.keys(errors_on(changeset)) |> Enum.sort() == [:clone_url, :name, :owner, :slug]
+    assert {:error, %Ash.Error.Invalid{} = error} = Config.create_repo(%{})
+    assert Map.keys(errors_on(error)) |> Enum.sort() == [:clone_url, :name, :owner, :slug]
 
-    assert {:error, changeset} = Config.update_repo(repo, %{name: "invalid name"})
-    assert errors_on(changeset).name == ["letters, digits, dots, dashes and underscores only"]
+    assert {:error, %Ash.Error.Invalid{} = error} =
+             Config.update_repo(repo, %{name: "invalid name"})
 
-    assert {:error, changeset} =
+    assert errors_on(error).name == ["letters, digits, dots, dashes and underscores only"]
+
+    assert {:error, %Ash.Error.Invalid{} = error} =
              Config.create_repo(Map.take(repo, [:name, :clone_url, :owner, :slug]))
 
-    assert errors_on(changeset).name == ["has already been taken"]
+    assert errors_on(error).name == ["has already been taken"]
   end
 
   test "projects load repositories, preserve defaults, and have an enabled read" do
@@ -59,9 +61,9 @@ defmodule Conductor.ConfigTest do
   test "projects require their fields and positive numbers and report identity errors on number" do
     project = project_fixture()
 
-    assert {:error, changeset} = Config.create_project(%{})
+    assert {:error, %Ash.Error.Invalid{} = error} = Config.create_project(%{})
 
-    assert Map.keys(errors_on(changeset)) |> Enum.sort() ==
+    assert Map.keys(errors_on(error)) |> Enum.sort() ==
              [
                :active_status,
                :handoff_status,
@@ -72,10 +74,15 @@ defmodule Conductor.ConfigTest do
                :runner_login
              ]
 
-    assert {:error, changeset} = Config.update_project(project, %{project_number: 0})
-    assert Map.has_key?(errors_on(changeset), :project_number)
-    assert {:error, changeset} = Config.update_project(project, %{done_status: ""})
-    assert Map.has_key?(errors_on(changeset), :done_status)
+    assert {:error, %Ash.Error.Invalid{} = error} =
+             Config.update_project(project, %{project_number: 0})
+
+    assert Map.has_key?(errors_on(error), :project_number)
+
+    assert {:error, %Ash.Error.Invalid{} = error} =
+             Config.update_project(project, %{done_status: ""})
+
+    assert Map.has_key?(errors_on(error), :done_status)
 
     attrs =
       Map.take(project, [
@@ -88,9 +95,9 @@ defmodule Conductor.ConfigTest do
         :handoff_status
       ])
 
-    assert {:error, changeset} = Config.create_project(attrs)
+    assert {:error, %Ash.Error.Invalid{} = error} = Config.create_project(attrs)
 
-    assert errors_on(changeset) == %{
+    assert errors_on(error) == %{
              project_number: ["is already configured for this repository"]
            }
   end
@@ -109,12 +116,16 @@ defmodule Conductor.ConfigTest do
     end
 
     for maximum <- [-1, 21] do
-      assert {:error, changeset} = Config.update_settings(settings, %{max_concurrent: maximum})
-      assert Map.has_key?(errors_on(changeset), :max_concurrent)
+      assert {:error, %Ash.Error.Invalid{} = error} =
+               Config.update_settings(settings, %{max_concurrent: maximum})
+
+      assert Map.has_key?(errors_on(error), :max_concurrent)
     end
 
-    assert {:error, changeset} = Config.update_settings(settings, %{prune_days: 0})
-    assert Map.has_key?(errors_on(changeset), :prune_days)
+    assert {:error, %Ash.Error.Invalid{} = error} =
+             Config.update_settings(settings, %{prune_days: 0})
+
+    assert Map.has_key?(errors_on(error), :prune_days)
   end
 
   test "models normalize roles and persist exactly the runner JSON shape" do

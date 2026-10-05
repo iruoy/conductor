@@ -26,6 +26,14 @@ mix setup
 mix phx.server   # http://localhost:4000
 ```
 
+### Upgrading an existing database
+
+Run `mix ecto.migrate` (or the release's migration command) before starting the upgraded app.
+The original `20261004212747_init` migration is retained unchanged: the Ash migration
+only adds the unique run identity on `(issue_key, attempt)`, preserving existing tables and data.
+Existing duplicate run attempts must be reconciled before applying that unique index;
+the migration fails rather than deleting or rewriting historical runs.
+
 Models come from pi-ai: the OpenAI subscription login in `~/.pi/agent/auth.json` (log in with `pi`; refreshes are
 shared with it through the same file lock), plus any provider whose API key is in the environment
 (`ANTHROPIC_API_KEY`, ...). Pick the head and per-complexity models on `/config`.

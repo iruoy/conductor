@@ -1,7 +1,7 @@
 defmodule Conductor.Config do
   @moduledoc "Repositories, projects, and the global settings."
   use Ash.Domain
-  alias Conductor.Config.{FormAdapter, Project, Repository, Settings}
+  alias Conductor.Config.{Project, Repository, Settings}
 
   resources do
     resource Repository
@@ -77,22 +77,14 @@ defmodule Conductor.Config do
     do: Ash.Changeset.for_update(record, :update, attrs, skip_unknown_inputs: [:*])
 
   defp persist(changeset) do
-    result =
-      case changeset.action_type do
-        :create -> Ash.create(changeset)
-        :update -> Ash.update(changeset)
-      end
-
-    form_result(result, changeset)
+    case changeset.action_type do
+      :create -> Ash.create(changeset)
+      :update -> Ash.update(changeset)
+    end
   end
 
   defp destroy_record(record) do
     changeset = Ash.Changeset.for_destroy(record, :destroy)
-    form_result(Ash.destroy(changeset, return_destroyed?: true), changeset)
+    Ash.destroy(changeset, return_destroyed?: true)
   end
-
-  defp form_result({:ok, record}, _changeset), do: {:ok, record}
-
-  defp form_result({:error, error}, changeset),
-    do: {:error, FormAdapter.changeset(changeset, Ash.Error.to_error_class(error).errors)}
 end

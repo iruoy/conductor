@@ -243,8 +243,27 @@
   ],
   "custom_statements": [],
   "has_create_action": true,
-  "hash": "A7DCB8FF18F4071300C7EFECDA698808B40F3BC7C100FDA40557A01E0CA07F43",
-  "identities": [],
+  "hash": "81500FCB83517F8F28671F4205A9B9EA129750DE8E1279280DAAC9B0BCB714E6",
+  "identities": [
+    {
+      "all_tenants?": false,
+      "base_filter": null,
+      "index_name": "runs_issue_key_attempt_index",
+      "keys": [
+        {
+          "type": "atom",
+          "value": "issue_key"
+        },
+        {
+          "type": "atom",
+          "value": "attempt"
+        }
+      ],
+      "name": "issue_key_attempt",
+      "nils_distinct?": true,
+      "where": null
+    }
+  ],
   "multitenancy": {
     "attribute": null,
     "global": null,
