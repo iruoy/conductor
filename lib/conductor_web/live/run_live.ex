@@ -22,110 +22,116 @@ defmodule ConductorWeb.RunLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash}>
-      <.header>
-        <span class="font-mono">{@run.id}</span>
-        <span class="font-normal">· {(@run.issue_snapshot || %{})["summary"]}</span>
-        <:subtitle>
-          <span class="inline-flex flex-wrap items-center gap-2">
-            <.status_badge status={@run.status} />
-            <span :if={@run.branch} class="font-mono">{@run.branch}</span>
-            <a :if={@run.pr_url} href={@run.pr_url} target="_blank" class="link link-primary">Pull request</a>
-          </span>
-        </:subtitle>
-        <:actions>
-          <button :if={Run.terminal?(@run)} id="retry" phx-click="retry" class="btn btn-sm">Retry</button>
+      <%!-- Fills the window below the navbar (4rem and its border) and inside the padding of <main> (2 × 2rem), so the
+      transcript scrolls in its own frame and the run's header, questions and tabs stay in view. --%>
+      <div id="run" class="flex h-[calc(100dvh-8rem-2px)] flex-col gap-6">
+        <.header>
+          <span class="font-mono">{@run.id}</span>
+          <span class="font-normal">· {(@run.issue_snapshot || %{})["summary"]}</span>
+          <:subtitle>
+            <span class="inline-flex flex-wrap items-center gap-2">
+              <.status_badge status={@run.status} />
+              <span :if={@run.branch} class="font-mono">{@run.branch}</span>
+              <a :if={@run.pr_url} href={@run.pr_url} target="_blank" class="link link-primary">Pull request</a>
+            </span>
+          </:subtitle>
+          <:actions>
+            <button :if={Run.terminal?(@run)} id="retry" phx-click="retry" class="btn btn-sm">Retry</button>
+            <button
+              :if={not Run.terminal?(@run) and @run.status != :handing_off}
+              id="abort"
+              phx-click={show_modal("confirm-abort")}
+              class="btn btn-sm btn-error btn-outline"
+            >
+              Abort
+            </button>
+            <.confirm_modal
+              :if={not Run.terminal?(@run) and @run.status != :handing_off}
+              id="confirm-abort"
+              title="Abort this run?"
+              confirm="Abort"
+              on_confirm={JS.push("abort")}
+            >
+              The agent stops and the run is marked as failed.
+            </.confirm_modal>
+          </:actions>
+        </.header>
+
+        <div :if={@run.status == :failed && @run.error} class="alert alert-error text-sm">
+          <.icon name="hero-exclamation-triangle" class="size-5" />
+          <span class="whitespace-pre-wrap">{@run.error}</span>
+        </div>
+
+        <section
+          :for={q <- @open_questions}
+          id={"question-#{q.qid}"}
+          class="card card-border card-sm border-warning"
+        >
+          <div class="card-body">
+            <h2 class="card-title text-sm text-warning">
+              <.icon name="hero-chat-bubble-left-ellipsis" class="size-5" /> The agent asks
+            </h2>
+            <p class="whitespace-pre-wrap text-sm">{q.text}</p>
+            <.form
+              for={to_form(%{"qid" => q.qid, "text" => ""})}
+              id={"answer-#{q.qid}"}
+              phx-submit="answer"
+            >
+              <input type="hidden" name="qid" value={q.qid} />
+              <.input type="textarea" name="text" value="" placeholder="Your answer" required />
+              <div class="card-actions">
+                <.button variant="primary" phx-disable-with="Sending…">Send answer</.button>
+              </div>
+            </.form>
+          </div>
+        </section>
+
+        <div :if={@conversations != []} role="tablist" class="tabs tabs-border" id="conversations">
           <button
-            :if={not Run.terminal?(@run) and @run.status != :handing_off}
-            id="abort"
-            phx-click={show_modal("confirm-abort")}
-            class="btn btn-sm btn-error btn-outline"
+            :for={{conversation, label} <- tab_labels(@conversations)}
+            role="tab"
+            id={"tab-#{conversation}"}
+            phx-click="select"
+            phx-value-conversation={conversation}
+            class={["tab font-mono text-xs", @selected == conversation && "tab-active"]}
           >
-            Abort
+            {label}
           </button>
-          <.confirm_modal
-            :if={not Run.terminal?(@run) and @run.status != :handing_off}
-            id="confirm-abort"
-            title="Abort this run?"
-            confirm="Abort"
-            on_confirm={JS.push("abort")}
-          >
-            The agent stops and the run is marked as failed.
-          </.confirm_modal>
-        </:actions>
-      </.header>
+        </div>
 
-      <div :if={@run.status == :failed && @run.error} class="alert alert-error text-sm">
-        <.icon name="hero-exclamation-triangle" class="size-5" />
-        <span class="whitespace-pre-wrap">{@run.error}</span>
-      </div>
-
-      <section
-        :for={q <- @open_questions}
-        id={"question-#{q.qid}"}
-        class="card card-border card-sm border-warning"
-      >
-        <div class="card-body">
-          <h2 class="card-title text-sm text-warning">
-            <.icon name="hero-chat-bubble-left-ellipsis" class="size-5" /> The agent asks
-          </h2>
-          <p class="whitespace-pre-wrap text-sm">{q.text}</p>
-          <.form
-            for={to_form(%{"qid" => q.qid, "text" => ""})}
-            id={"answer-#{q.qid}"}
-            phx-submit="answer"
-          >
-            <input type="hidden" name="qid" value={q.qid} />
-            <.input type="textarea" name="text" value="" placeholder="Your answer" required />
-            <div class="card-actions">
-              <.button variant="primary" phx-disable-with="Sending…">Send answer</.button>
+        <.message_scroller id="transcript-scroller" key={@selected} class="min-h-80 flex-1">
+          <div id="transcript" phx-update="stream" class="space-y-4">
+            <div
+              id="transcript-empty"
+              class="hidden py-8 text-center text-sm text-base-content/60 only:block"
+            >
+              Nothing to show yet.
             </div>
-          </.form>
-        </div>
-      </section>
+            <div :for={{dom_id, item} <- @streams.items} id={dom_id}>
+              <.transcript_item item={item} />
+            </div>
+          </div>
 
-      <div :if={@conversations != []} role="tablist" class="tabs tabs-border" id="conversations">
-        <button
-          :for={{conversation, label} <- tab_labels(@conversations)}
-          role="tab"
-          id={"tab-#{conversation}"}
-          phx-click="select"
-          phx-value-conversation={conversation}
-          class={["tab font-mono text-xs", @selected == conversation && "tab-active"]}
-        >
-          {label}
-        </button>
-      </div>
-
-      <div id="transcript" phx-update="stream" class="space-y-4">
-        <div
-          id="transcript-empty"
-          class="hidden py-8 text-center text-sm text-base-content/60 only:block"
-        >
-          Nothing to show yet.
-        </div>
-        <div :for={{dom_id, item} <- @streams.items} id={dom_id}>
-          <.transcript_item item={item} />
-        </div>
-      </div>
-
-      <div :if={@live_text != "" or @live_tools != %{}} id="live" class="space-y-2">
-        <.chat_message :if={@live_text != ""} from="agent" text={@live_text} streaming />
-        <.fold
-          :for={{call_id, tool} <- @live_tools}
-          id={"live-tool-#{call_id}"}
-          class="border-info/40"
-          open
-        >
-          <:title>
-            <span class="loading loading-spinner loading-xs text-info"></span>
-            <span class="font-semibold">{tool.name}</span>
-            <span class="truncate text-base-content/70">{tool_args(tool.args)}</span>
-          </:title>
-          <pre
-            :if={tool.output != ""}
-            class="max-h-64 overflow-auto whitespace-pre-wrap break-all"
-          >{tool.output}</pre>
-        </.fold>
+          <div :if={@live_text != "" or @live_tools != %{}} id="live" class="space-y-2">
+            <.chat_message :if={@live_text != ""} from="agent" text={@live_text} streaming />
+            <.fold
+              :for={{call_id, tool} <- @live_tools}
+              id={"live-tool-#{call_id}"}
+              class="border-info/40"
+              open
+            >
+              <:title>
+                <span class="loading loading-spinner loading-xs text-info"></span>
+                <span class="font-semibold">{tool.name}</span>
+                <span class="truncate text-base-content/70">{tool_args(tool.args)}</span>
+              </:title>
+              <pre
+                :if={tool.output != ""}
+                class="max-h-64 overflow-auto whitespace-pre-wrap break-all"
+              >{tool.output}</pre>
+            </.fold>
+          </div>
+        </.message_scroller>
       </div>
     </Layouts.app>
     """

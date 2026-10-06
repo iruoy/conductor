@@ -63,6 +63,11 @@ defmodule ConductorWeb.RunLiveTest do
     })
 
     assert has_element?(view, "#live .prose strong", "bold")
+
+    # The transcript and what streams in share one scroller, which offers a way back to the end.
+    assert has_element?(view, "#transcript-scroller[phx-hook] [role=log] #transcript")
+    assert has_element?(view, "#transcript-scroller [role=log] #live")
+    assert has_element?(view, "#transcript-scroller button[data-scroller-button][inert]")
     refute has_element?(view, "#live script")
 
     send_event.(%{

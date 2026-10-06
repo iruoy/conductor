@@ -73,6 +73,125 @@ defmodule ConductorWeb.RunComponents do
   def put_result(item, payload),
     do: %{item | results: Map.put(item.results, result_call_id(payload), payload)}
 
+  attr :id, :string, required: true
+
+  attr :key, :any,
+    default: nil,
+    doc: "what is shown; when it changes the scroller goes back to the end"
+
+  attr :class, :any, default: nil
+  slot :inner_block, required: true
+
+  @doc """
+  The scrolling frame of a transcript. It opens at the end and follows what comes in for as long as the reader
+  stays there; scrolling away lets go, and the button or scrolling back to the end picks it up again.
+  """
+  def message_scroller(assigns) do
+    ~H"""
+    <div id={@id} phx-hook=".MessageScroller" data-scroller-key={@key} class={["relative", @class]}>
+      <div
+        data-scroller-viewport
+        role="region"
+        aria-label="Messages"
+        tabindex="0"
+        class="h-full overflow-y-auto overscroll-contain pr-2 outline-none"
+      >
+        <div data-scroller-content role="log" aria-relevant="additions" class="space-y-4 pb-2">
+          {render_slot(@inner_block)}
+        </div>
+      </div>
+      <button
+        type="button"
+        data-scroller-button
+        data-active="false"
+        inert
+        tabindex="-1"
+        aria-label="Jump to latest"
+        class="btn btn-circle btn-sm absolute bottom-3 left-1/2 -translate-x-1/2 shadow-md transition duration-200 data-[active=false]:pointer-events-none data-[active=false]:translate-y-2 data-[active=false]:opacity-0"
+      >
+        <.icon name="hero-arrow-down-micro" class="size-4" />
+      </button>
+    </div>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".MessageScroller">
+      // How close to the end, in pixels, still counts as being there.
+      const EDGE = 8
+
+      export default {
+        mounted() {
+          this.viewport = this.el.querySelector("[data-scroller-viewport]")
+          this.content = this.el.querySelector("[data-scroller-content]")
+          this.button = this.el.querySelector("[data-scroller-button]")
+          this.key = this.el.dataset.scrollerKey
+          this.following = true
+          // A smooth scroll to the end passes positions that are not the end; those must not let go.
+          this.jumping = false
+
+          this.viewport.addEventListener("scroll", () => {
+            if (this.atEnd()) {
+              this.following = true
+              this.jumping = false
+            } else if (!this.jumping) {
+              this.following = false
+            }
+            this.sync()
+          }, {passive: true})
+
+          // The reader taking over ends a jump, so that the scroll that follows lets go.
+          for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) {
+            this.viewport.addEventListener(type, () => this.jumping = false, {passive: true})
+          }
+
+          this.button.addEventListener("click", () => {
+            const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            this.following = true
+            this.jumping = !still
+            this.viewport.scrollTo({top: this.viewport.scrollHeight, behavior: still ? "auto" : "smooth"})
+            this.viewport.focus({preventScroll: true})
+          })
+
+          // Streaming text, a fold opening and the frame itself resizing all move the end.
+          this.observer = new ResizeObserver(() => this.follow())
+          this.observer.observe(this.content)
+          this.observer.observe(this.viewport)
+          this.follow()
+        },
+
+        updated() {
+          if (this.el.dataset.scrollerKey !== this.key) {
+            this.key = this.el.dataset.scrollerKey
+            this.following = true
+          }
+          this.follow()
+        },
+
+        destroyed() {
+          this.observer.disconnect()
+        },
+
+        atEnd() {
+          const {scrollHeight, scrollTop, clientHeight} = this.viewport
+          return scrollHeight - scrollTop - clientHeight <= EDGE
+        },
+
+        follow() {
+          if (this.following) {
+            this.jumping = false
+            this.viewport.scrollTop = this.viewport.scrollHeight
+          }
+          this.sync()
+        },
+
+        // A patch puts the button back as the server rendered it, so this runs after each one too.
+        sync() {
+          const active = !this.atEnd()
+          this.button.dataset.active = String(active)
+          this.button.inert = !active
+        }
+      }
+    </script>
+    """
+  end
+
   attr :from, :string, required: true, values: ~w(agent input)
   attr :text, :string, required: true
   attr :streaming, :boolean, default: false
