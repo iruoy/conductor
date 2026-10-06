@@ -109,3 +109,13 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* daisyUI's text skeleton fades to 20% of the text color, too faint to read a label through. */
+@utility skeleton-text {
+  background-image: linear-gradient(
+    105deg,
+    color-mix(in oklab, var(--color-base-content) 50%, transparent) 0% 40%,
+    var(--color-base-content) 50%,
+    color-mix(in oklab, var(--color-base-content) 50%, transparent) 60% 100%
+  );
+}

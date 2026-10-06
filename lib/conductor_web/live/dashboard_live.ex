@@ -213,7 +213,7 @@ defmodule ConductorWeb.DashboardLive do
          "toolName" => name,
          "args" => args
        }) do
-    log(socket, role, "#{name} #{truncate(tool_args(args), 200)}", "text-base-content/70")
+    log(socket, role, "#{name} #{truncate(tool_call(name, args), 200)}", "text-base-content/70")
   end
 
   defp log_event(socket, role, %{"type" => "auto_retry_start", "errorMessage" => message}) do
