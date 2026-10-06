@@ -30,6 +30,8 @@ export type RunRecord = {
 	github?: GithubRun;
 	/** The newest submission to the head conversation; the run is idle once it settles. */
 	submissionId: number | null;
+	/** What a human told the agent while it worked, as submissions to the head conversation, oldest first. */
+	messages?: number[];
 	status: "running" | "waiting_for_input" | "settled";
 	aborted: boolean;
 	questions: Record<string, Question>;

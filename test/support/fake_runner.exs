@@ -97,6 +97,19 @@ defmodule FakeRunner do
     end
   end
 
+  # The message waits in the inbox; a test places it by ingesting what the runner would send then.
+  defp handle(%{"type" => "message", "run_id" => id} = c, state) do
+    case state[id] do
+      %{"status" => "running"} ->
+        reply(c, %{submission_id: 3})
+        agent(id, %{type: "inbox_update", items: [%{id: 3, mode: "steer"}]})
+        {:ok, state}
+
+      _ ->
+        error(c, "run #{id} is not running", state)
+    end
+  end
+
   defp handle(%{"type" => "abort", "run_id" => id} = c, state) do
     if state[id] do
       reply(c, %{status: "aborting"})

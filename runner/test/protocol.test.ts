@@ -179,6 +179,61 @@ describe("runner protocol", () => {
 		}
 	});
 
+	it("passes a message to the agent while it works", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		let seen = "";
+		const { runner, events } = await setup([
+			async () => {
+				await gate;
+				return fauxAssistantMessage([fauxToolCall("bash", { command: "true" }, { id: "c1" })], { stopReason: "toolUse" });
+			},
+			(context) => {
+				seen = JSON.stringify(context.messages);
+				return fauxAssistantMessage("Used tabs.\nDONE");
+			},
+		]);
+		await start(runner, "PROJ-21-1");
+		await until(() => events.find((e) => e.type === "agent_event" && (e.event as { type: string }).type === "message_start"));
+		const reply = (await runner.handle({ type: "message", run_id: "PROJ-21-1", text: "Use tabs" })) as { submission_id: number };
+		expect(reply.submission_id).toBeTypeOf("number");
+		const queued = await until(() =>
+			events.find((e) => e.type === "agent_event" && (e.event as { type: string }).type === "inbox_update"),
+		);
+		expect((queued.event as { items: unknown[] }).items).toEqual([{ id: reply.submission_id, mode: "steer" }]);
+		release();
+
+		expect(await settledEvent(events, "PROJ-21-1")).toMatchObject({ outcome: "completed", summary: "Used tabs.\nDONE" });
+		expect(seen).toContain("Use tabs");
+		expect(events.filter((e) => e.type === "run_settled")).toHaveLength(1);
+	});
+
+	it("goes on with a message that came as the agent finished", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		const { runner, events } = await setup([
+			async () => {
+				await gate;
+				return fauxAssistantMessage("First.\nDONE");
+			},
+			fauxAssistantMessage("Second.\nDONE"),
+		]);
+		await start(runner, "PROJ-22-1");
+		await until(() => events.find((e) => e.type === "agent_event" && (e.event as { type: string }).type === "message_start"));
+		await runner.handle({ type: "message", run_id: "PROJ-22-1", text: "One more thing" });
+		release();
+
+		expect(await settledEvent(events, "PROJ-22-1")).toMatchObject({ outcome: "completed", summary: "Second.\nDONE" });
+		expect(events.filter((e) => e.type === "run_settled")).toHaveLength(1);
+	});
+
+	it("takes no message for a run that is not running", async () => {
+		const { runner, events } = await setup([fauxAssistantMessage("DONE")]);
+		await start(runner, "PROJ-23-1");
+		await settledEvent(events, "PROJ-23-1");
+		await expect(runner.handle({ type: "message", run_id: "PROJ-23-1", text: "hello" })).rejects.toThrow("is not running");
+	});
+
 	it("aborts a run waiting for input", async () => {
 		const { runner, events } = await setup([
 			fauxAssistantMessage([fauxToolCall("ask_human", { question: "?" }, { id: "c1" })], { stopReason: "toolUse" }),

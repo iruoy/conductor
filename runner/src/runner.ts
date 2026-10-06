@@ -106,6 +106,8 @@ export class Runner {
 				return this.startRun(command);
 			case "answer":
 				return this.answer(command);
+			case "message":
+				return this.message(command);
 			case "abort":
 				return this.abort(str(command, "run_id"));
 			case "sync":
@@ -226,6 +228,28 @@ export class Runner {
 		});
 	}
 
+	/**
+	 * Tells the head agent something while it works. pi places it after the tools the agent is running (a steer), so
+	 * the agent reads it before it goes on; the run's answer then also answers the message.
+	 */
+	private message(command: Command) {
+		const runId = str(command, "run_id");
+		const text = str(command, "text");
+		return this.serial(runId, async () => {
+			const run = await this.run(runId);
+			if (run === undefined) throw new ProtocolError(`unknown run ${runId}`);
+			if (run.status !== "running") throw new ProtocolError(`run ${runId} is not running`);
+			const conversation = (await this.harness.conversation(run.conversationId as ConversationId, ctx))!;
+			const submission = await conversation.submit({ type: "input", content: text, whenBusy: "steer" }, ctx);
+			await this.update(runId, (r) => {
+				// A new list: pushing onto one assigned in the same step would bypass the draft.
+				r.messages = [...(r.messages ?? []), submission.id as number];
+			});
+			this.track(runId);
+			return { submission_id: submission.id };
+		});
+	}
+
 	private abort(runId: string) {
 		return this.serial(runId, async () => {
 			const run = await this.run(runId);
@@ -269,27 +293,52 @@ export class Runner {
 			for (const child of Object.values(run.children)) await this.attach(runId, child.conversationId, `sub:${child.key}`);
 			let settled: SettledSubmissionRecord | undefined;
 			let waitedFor: number | null = null;
+			let messages = 0;
 			for (;;) {
 				const current = (await this.run(runId))!;
-				if (current.submissionId === waitedFor || current.submissionId === null) break;
-				waitedFor = current.submissionId;
-				const submission = await this.harness.submission(waitedFor as SubmissionId, ctx);
-				settled = await submission?.wait(ctx);
+				if (current.submissionId === null) break;
+				if (current.submissionId !== waitedFor) {
+					waitedFor = current.submissionId;
+					messages = 0;
+					settled = await this.settled(waitedFor);
+					continue;
+				}
+				// A message the agent read in time settles with the run. One that came too late for that started work of
+				// its own, and the answer to that is the run's.
+				const later = messagesAfter(current, waitedFor);
+				if (settled?.status !== "done" || messages >= later.length) break;
+				const answered = await this.settled(later[messages++]!);
+				if (answered?.status === "done") settled = answered;
 			}
 			this.tracking.delete(runId);
-			if (settled !== undefined && !this.closed) await this.serial(runId, () => this.evaluate(runId, settled!));
+			const decided = { submissionId: waitedFor, messages };
+			if (settled !== undefined && !this.closed) await this.serial(runId, () => this.evaluate(runId, settled!, decided));
 		})().catch((error) => {
 			this.tracking.delete(runId);
 			if (!this.closed) this.emit({ type: "log", level: "error", message: `track ${runId}: ${(error as Error).stack ?? error}` });
 		});
 	}
 
-	private async evaluate(runId: string, settled: SettledSubmissionRecord): Promise<void> {
+	private async settled(submissionId: number): Promise<SettledSubmissionRecord | undefined> {
+		return (await this.harness.submission(submissionId as SubmissionId, ctx))?.wait(ctx);
+	}
+
+	/** `decided` is what the tracker had seen when it took `settled` for the run's outcome. */
+	private async evaluate(
+		runId: string,
+		settled: SettledSubmissionRecord,
+		decided: { submissionId: number | null; messages: number },
+	): Promise<void> {
 		const run = (await this.run(runId))!;
-		// An answer submitted meanwhile started a newer submission; its own tracker decides.
-		if (run.status !== "running" || run.submissionId !== (settled.id as number)) return;
+		// An answer or a message submitted meanwhile is tracked on its own; that tracker decides.
+		if (run.status !== "running" || run.submissionId !== decided.submissionId) return;
+		if (messagesAfter(run, decided.submissionId).length !== decided.messages) return;
 		if (run.aborted) return this.settle(runId, { outcome: "failed", summary: "", error: "aborted" });
 		if (settled.status !== "done" || settled.type !== "input") {
+			// Messages still waiting for the agent must not start work on a run that has failed.
+			if (messagesAfter(run, decided.submissionId).length > 0) {
+				await (await this.harness.conversation(run.conversationId as ConversationId, ctx))?.abort(ctx);
+			}
 			const reason = [settled.reason, settled.detail].filter(Boolean).join(": ");
 			return this.settle(runId, { outcome: "failed", summary: "", error: reason || "the run ended without an answer" });
 		}
@@ -392,6 +441,11 @@ export function parseVerdict(text: string): Pick<Settled, "outcome" | "error"> |
 		if (failed) return { outcome: "failed", error: failed[1] || "the agent reported a failure" };
 	}
 	return undefined;
+}
+
+/** The messages sent since a submission: submission ids only grow. */
+function messagesAfter(run: Readonly<RunRecord>, submissionId: number | null): number[] {
+	return (run.messages ?? []).filter((id) => submissionId !== null && id > submissionId);
 }
 
 function str(command: Command, key: string): string {

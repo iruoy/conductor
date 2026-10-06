@@ -44,6 +44,17 @@ defmodule Conductor.Coordinator do
     end
   end
 
+  @doc """
+  Tells the head agent of a running run something. It reads it after the tools it is running and goes on from
+  there. Returns the id the runner gave the message, by which it shows in the agent's inbox until it is read.
+  """
+  def message(run_id, text) do
+    with {:ok, %{"submission_id" => id}} <-
+           Runner.call(%{type: "message", run_id: run_id, text: text}) do
+      {:ok, id}
+    end
+  end
+
   def pump, do: GenServer.cast(__MODULE__, :pump)
 
   ## Server
