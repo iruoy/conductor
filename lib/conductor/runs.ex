@@ -36,6 +36,71 @@ defmodule Conductor.Runs do
     |> Ash.read!()
   end
 
+  @status_groups %{
+    all: nil,
+    running: ~w(running provisioning handing_off)a,
+    waiting: ~w(waiting_for_input)a,
+    completed: ~w(completed)a,
+    failed: ~w(failed)a,
+    picked_up: ~w(picked_up)a
+  }
+
+  @doc "The filter groups of the runs list, in display order."
+  def status_groups, do: [:all, :running, :waiting, :completed, :failed, :picked_up]
+
+  @doc """
+  The newest runs in a status group (`:all` for every status) whose id or issue summary contains `text`,
+  case-insensitive.
+  """
+  def filter_runs(group \\ :all, text \\ "", limit \\ 200) do
+    Run
+    |> filter_query(group, text)
+    |> Ash.Query.sort(inserted_at: :desc, id: :desc)
+    |> Ash.Query.limit(limit)
+    |> Ash.Query.load(:project)
+    |> Ash.read!()
+  end
+
+  @doc "How many runs `filter_runs/3` matches, without the limit."
+  def count_runs(group \\ :all, text \\ ""), do: Run |> filter_query(group, text) |> Ash.count!()
+
+  @doc "The true number of runs per status group, as a map keyed by `status_groups/0`."
+  def group_counts, do: Map.new(status_groups(), &{&1, count_runs(&1)})
+
+  @doc "Whether a run belongs to the status group and matches the text, as `filter_runs/3` would say."
+  def matches?(%Run{} = run, group, text) do
+    needle = text |> String.trim() |> String.downcase()
+    summary = (run.issue_snapshot || %{})["summary"] || ""
+
+    group_statuses = Map.fetch!(@status_groups, group)
+
+    (is_nil(group_statuses) or run.status in group_statuses) and
+      (needle == "" or String.contains?(String.downcase(run.id), needle) or
+         String.contains?(String.downcase(to_string(summary)), needle))
+  end
+
+  defp filter_query(query, group, text) do
+    query =
+      case Map.fetch!(@status_groups, group) do
+        nil -> query
+        statuses -> Ash.Query.filter(query, status in ^statuses)
+      end
+
+    case String.trim(text) do
+      "" ->
+        query
+
+      text ->
+        pattern = "%" <> String.replace(String.downcase(text), ~r/[\\%_]/, "\\\\\\0") <> "%"
+
+        Ash.Query.filter(
+          query,
+          fragment("lower(?) like ?", id, ^pattern) or
+            fragment("lower(?->>'summary') like ?", issue_snapshot, ^pattern)
+        )
+    end
+  end
+
   def get_run(id), do: Ash.get!(Run, id, load: [project: :repo], not_found_error?: false)
   def get_run!(id), do: Ash.get!(Run, id, load: [project: :repo], not_found_error?: true)
 

@@ -17,15 +17,27 @@ defmodule ConductorWeb.DashboardLive do
     end
 
     %{interval: interval, last_poll: last_poll} = Poller.status()
-    runs = Runs.list_runs()
 
+    # The runs themselves are read by handle_params/3, which knows the filter.
     {:ok,
      socket
      |> assign(page_title: "Runs", selected: nil, log_seq: 0, now: DateTime.utc_now())
      |> assign(interval: interval, last_poll: last_poll)
-     |> track_runs(runs)
-     |> stream(:runs, runs)
+     |> assign(group: :all, text: "", run_ids: MapSet.new())
+     |> assign(counts: %{}, shown_count: 0, total_count: 0)
+     |> stream(:runs, [])
      |> stream(:log, [])}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    group = parse_group(params["status"])
+    text = String.trim(to_string(params["q"] || ""))
+
+    {:noreply,
+     socket
+     |> assign(group: group, text: text, now: DateTime.utc_now())
+     |> load_runs()}
   end
 
   @impl true
@@ -63,6 +75,55 @@ defmodule ConductorWeb.DashboardLive do
       </:actions>
       <%!-- Fills the window below the header (2.5rem and its border), so the footer sits at the bottom. --%>
       <div class="flex min-h-[calc(100dvh-2.5rem-1px)] flex-col">
+        <div
+          id="runs-filters"
+          class="flex flex-wrap items-center gap-1 border-b border-base-300 bg-surface-2 px-3 py-2"
+        >
+          <div role="group" aria-label="Filter by status" class="flex flex-wrap gap-1">
+            <button
+              :for={{group, label, dot} <- filter_chips()}
+              id={"filter-#{group}"}
+              type="button"
+              phx-click="filter"
+              phx-value-status={group}
+              aria-pressed={to_string(@group == group)}
+              class={[
+                "inline-flex h-6 cursor-pointer items-center gap-[5px] rounded-full border px-2 text-xs transition-colors",
+                if(@group == group,
+                  do: "border-base-content bg-base-content text-base-100",
+                  else: "border-line-strong bg-base-100 hover:bg-row-hover"
+                )
+              ]}
+            >
+              <span :if={dot} class={["size-1.5 rounded-full", dot]}></span>
+              {label}
+              <span id={"filter-count-#{group}"} class="opacity-70">{@counts[group]}</span>
+            </button>
+          </div>
+          <div class="flex-1"></div>
+          <.form
+            for={to_form(%{"q" => @text}, as: :filter)}
+            id="runs-search-form"
+            phx-change="search"
+            phx-submit="search"
+            class="w-full sm:w-[220px]"
+          >
+            <label class="flex h-6 items-center gap-1.5 rounded border border-line-strong bg-base-100 px-2 text-fg-secondary">
+              <.icon name="hero-magnifying-glass-micro" class="size-3 shrink-0" />
+              <input
+                id="runs-search"
+                type="text"
+                name="filter[q]"
+                value={@text}
+                autocomplete="off"
+                aria-label="Filter runs"
+                placeholder="Filter by issue or run"
+                phx-debounce="250"
+                class="min-w-0 flex-1 border-0 bg-transparent p-0 text-xs text-base-content outline-0 placeholder:text-fg-secondary focus:ring-0"
+              />
+            </label>
+          </.form>
+        </div>
         <div id="runs-table" class="flex-1 overflow-x-auto">
           <table class="w-full border-collapse text-[13px]">
             <thead>
@@ -76,9 +137,6 @@ defmodule ConductorWeb.DashboardLive do
               </tr>
             </thead>
             <tbody id="runs" phx-update="stream">
-              <tr id="runs-empty" class="hidden only:table-row">
-                <td colspan="6" class="px-3 py-6 text-center text-fg-secondary">No runs yet.</td>
-              </tr>
               <tr
                 :for={{dom_id, run} <- @streams.runs}
                 id={dom_id}
@@ -199,6 +257,13 @@ defmodule ConductorWeb.DashboardLive do
               </tr>
             </tbody>
           </table>
+          <p
+            :if={@shown_count == 0}
+            id="runs-empty"
+            class="px-3 py-6 text-center text-[13px] text-fg-secondary"
+          >
+            {if @total_count == 0, do: "No runs yet.", else: "No runs match this filter."}
+          </p>
         </div>
 
         <section :if={@selected} id="live-log" class="border-t border-base-300 bg-base-100">
@@ -239,7 +304,7 @@ defmodule ConductorWeb.DashboardLive do
           id="runs-footer"
           class="flex h-[26px] items-center justify-end gap-3 border-t border-base-300 bg-surface-2 px-3 text-[11px] text-fg-secondary"
         >
-          <span id="runs-count">{@run_count} of {@run_count} runs</span>
+          <span id="runs-count">{@shown_count} of {@total_count} runs</span>
         </footer>
       </div>
     </Layouts.app>
@@ -252,19 +317,24 @@ defmodule ConductorWeb.DashboardLive do
     {:noreply, put_flash(socket, :info, "Checking GitHub for new issues…")}
   end
 
+  def handle_event("filter", %{"status" => status}, socket) do
+    {:noreply, push_patch(socket, to: filter_path(parse_group(status), socket.assigns.text))}
+  end
+
+  def handle_event("search", %{"filter" => %{"q" => q}}, socket) do
+    {:noreply, push_patch(socket, to: filter_path(socket.assigns.group, q))}
+  end
+
   def handle_event("select", %{"id" => id}, socket) do
     if socket.assigns.selected, do: Runs.unsubscribe(socket.assigns.selected)
     selected = if id == "", do: nil, else: id
     if selected, do: Runs.subscribe(selected)
 
-    runs = Runs.list_runs()
-
     {:noreply,
      socket
      |> assign(selected: selected, now: DateTime.utc_now())
      |> stream(:log, [], reset: true)
-     |> track_runs(runs)
-     |> stream(:runs, runs)}
+     |> load_runs()}
   end
 
   def handle_event("retry", %{"id" => id}, socket) do
@@ -289,14 +359,26 @@ defmodule ConductorWeb.DashboardLive do
 
   @impl true
   def handle_info({:run_updated, run}, socket) do
-    # A run inserted for the first time goes to the top; updates keep their place.
-    at = if MapSet.member?(socket.assigns.run_ids, run.id), do: -1, else: 0
+    %{run_ids: run_ids, group: group, text: text} = socket.assigns
+    shown? = MapSet.member?(run_ids, run.id)
 
     socket =
-      socket
-      |> assign(now: DateTime.utc_now())
-      |> track_runs([run])
-      |> stream_insert(:runs, run, at: at)
+      cond do
+        # A run inserted for the first time goes to the top; updates keep their place.
+        Runs.matches?(run, group, text) ->
+          socket
+          |> track_runs([run])
+          |> stream_insert(:runs, run, at: if(shown?, do: -1, else: 0))
+
+        # A run that left the filter goes; one that never was in it stays out.
+        shown? ->
+          socket |> untrack_run(run) |> stream_delete(:runs, run)
+
+        true ->
+          socket
+      end
+
+    socket = socket |> assign(now: DateTime.utc_now()) |> assign_counts()
 
     socket =
       if run.id == socket.assigns.selected,
@@ -365,10 +447,61 @@ defmodule ConductorWeb.DashboardLive do
     )
   end
 
-  # Streams cannot be counted, so the ids on the page are kept to count them and to tell a new run from an update.
+  # Reads the runs of the current filter again and resets the stream.
+  defp load_runs(socket) do
+    runs = Runs.filter_runs(socket.assigns.group, socket.assigns.text)
+
+    socket
+    |> assign(run_ids: MapSet.new(runs, & &1.id))
+    |> assign_counts()
+    |> stream(:runs, runs, reset: true)
+  end
+
+  # The numbers are true counts from the database, not the length of the (capped) list on the page:
+  # the chips count per status group, the footer counts the runs of the filter against all runs.
+  defp assign_counts(socket) do
+    %{group: group, text: text} = socket.assigns
+    counts = Runs.group_counts()
+
+    assign(socket,
+      counts: counts,
+      shown_count: Runs.count_runs(group, text),
+      total_count: counts.all
+    )
+  end
+
+  # Streams cannot be counted, so the ids on the page are kept to tell a new run from an update.
   defp track_runs(socket, runs) do
-    ids = Enum.into(runs, socket.assigns[:run_ids] || MapSet.new(), & &1.id)
-    assign(socket, run_ids: ids, run_count: MapSet.size(ids))
+    assign(socket, :run_ids, Enum.into(runs, socket.assigns.run_ids, & &1.id))
+  end
+
+  defp untrack_run(socket, run),
+    do: assign(socket, :run_ids, MapSet.delete(socket.assigns.run_ids, run.id))
+
+  defp parse_group(status) do
+    Enum.find(Runs.status_groups(), :all, &(Atom.to_string(&1) == status))
+  end
+
+  defp filter_path(group, text) do
+    params =
+      [
+        status: if(group != :all, do: group),
+        q: if(String.trim(text) != "", do: String.trim(text))
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    ~p"/?#{params}"
+  end
+
+  defp filter_chips do
+    [
+      {:all, "All", nil},
+      {:running, "Running", "bg-dot-blue"},
+      {:waiting, "Waiting for input", "bg-dot-orange"},
+      {:completed, "Completed", "bg-dot-green"},
+      {:failed, "Failed", "bg-dot-red"},
+      {:picked_up, "Picked up", "bg-dot-grey"}
+    ]
   end
 
   defp under_way?(run), do: run.status in @under_way

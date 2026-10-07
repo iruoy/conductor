@@ -303,6 +303,58 @@ defmodule Conductor.RunsTest do
     refute_received {:run_updated, _}
   end
 
+  describe "filter_runs/3" do
+    setup do
+      project = project_fixture(%{repo: repo_fixture()})
+      run_fixture(project, "shop-1", %{status: :running})
+      run_fixture(project, "shop-2", %{status: :provisioning})
+      run_fixture(project, "shop-3", %{status: :failed, error: "boom"})
+
+      run_fixture(project, "shop-4", %{
+        status: :completed,
+        issue_snapshot: snapshot("shop-4", "Reset 100% of the Cache_keys")
+      })
+
+      :ok
+    end
+
+    test "filters by status group and counts the whole group" do
+      assert ["shop-2-1", "shop-1-1"] = Enum.map(Runs.filter_runs(:running), & &1.id)
+      assert [%{id: "shop-3-1"}] = Runs.filter_runs(:failed)
+      assert length(Runs.filter_runs(:all)) == 4
+
+      assert %{all: 4, running: 2, failed: 1, completed: 1, waiting: 0, picked_up: 0} =
+               Runs.group_counts()
+
+      assert Runs.count_runs(:running) == 2
+      assert length(Runs.filter_runs(:all, "", 1)) == 1
+      assert Runs.count_runs(:all) == 4
+    end
+
+    test "matches id and summary case-insensitively, taking wildcards literally" do
+      assert [%{id: "shop-3-1"}] = Runs.filter_runs(:all, "SHOP-3")
+      assert [%{id: "shop-4-1"}] = Runs.filter_runs(:all, "cache_KEYS")
+      assert [%{id: "shop-4-1"}] = Runs.filter_runs(:all, "100%")
+      assert [] = Runs.filter_runs(:all, "cache%keys")
+      assert [] = Runs.filter_runs(:failed, "cache")
+      assert Runs.count_runs(:all, "fix the thing") == 3
+    end
+
+    test "matches?/3 agrees with the query" do
+      for group <- Runs.status_groups(), text <- ["", "shop-3", "CACHE_keys", "nope"] do
+        expected = Runs.filter_runs(group, text) |> Enum.map(& &1.id) |> Enum.sort()
+
+        actual =
+          Runs.filter_runs(:all)
+          |> Enum.filter(&Runs.matches?(&1, group, text))
+          |> Enum.map(& &1.id)
+          |> Enum.sort()
+
+        assert actual == expected
+      end
+    end
+  end
+
   defp ingest(run, event) do
     Runs.ingest(%{
       "type" => "agent_event",

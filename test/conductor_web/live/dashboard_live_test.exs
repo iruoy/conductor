@@ -126,6 +126,101 @@ defmodule ConductorWeb.DashboardLiveTest do
     assert has_element?(view, "#runs-count", "1 of 1 runs")
   end
 
+  describe "filters" do
+    setup %{project: project} do
+      run_fixture(project, "shop-1", %{status: :running})
+
+      run_fixture(project, "shop-2", %{
+        status: :failed,
+        error: "boom",
+        issue_snapshot: snapshot("shop-2", "Fix the Checkout_page")
+      })
+
+      run_fixture(project, "shop-3", %{status: :completed})
+      run_fixture(project, "shop-4")
+      :ok
+    end
+
+    test "chips show true counts and filter by status group", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+      assert has_element?(view, "#filter-all[aria-pressed=true]", "4")
+      assert has_element?(view, "#filter-count-running", "1")
+      assert has_element?(view, "#filter-count-failed", "1")
+      assert has_element?(view, "#runs-count", "4 of 4 runs")
+
+      view |> element("#filter-failed") |> render_click()
+      assert_patch(view, ~p"/?status=failed")
+      assert has_element?(view, "#filter-failed[aria-pressed=true]")
+      assert has_element?(view, "#filter-all[aria-pressed=false]")
+      assert has_element?(view, "#open-shop-2-1")
+      refute has_element?(view, "#open-shop-1-1")
+      assert has_element?(view, "#runs-count", "1 of 4 runs")
+      assert has_element?(view, "#filter-count-all", "4")
+    end
+
+    test "the text field matches run id and summary together with the chip", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/")
+
+      view |> form("#runs-search-form", filter: %{q: "CHECKOUT_"}) |> render_change()
+      assert_patch(view, ~p"/?q=CHECKOUT_")
+      assert has_element?(view, "#open-shop-2-1")
+      refute has_element?(view, "#open-shop-1-1")
+      assert has_element?(view, "#runs-count", "1 of 4 runs")
+
+      view |> form("#runs-search-form", filter: %{q: "shop-3"}) |> render_change()
+      assert has_element?(view, "#open-shop-3-1")
+      refute has_element?(view, "#open-shop-2-1")
+
+      view |> element("#filter-failed") |> render_click()
+      refute has_element?(view, "#open-shop-3-1")
+      assert has_element?(view, "#runs-empty", "No runs match this filter.")
+      assert has_element?(view, "#runs-count", "0 of 4 runs")
+    end
+
+    test "the filter lives in the URL", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/?status=completed&q=shop")
+      assert has_element?(view, "#filter-completed[aria-pressed=true]")
+      assert has_element?(view, "#runs-search[value=shop]")
+      assert has_element?(view, "#open-shop-3-1")
+      refute has_element?(view, "#open-shop-2-1")
+    end
+
+    test "a live update outside the filter stays out of the table but counts", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, view, _html} = live(conn, ~p"/?status=failed")
+
+      run_fixture(project, "shop-5", %{status: :running})
+      refute has_element?(view, "#open-shop-5-1")
+      assert has_element?(view, "#filter-count-running", "2")
+      assert has_element?(view, "#filter-count-all", "5")
+      assert has_element?(view, "#runs-count", "1 of 5 runs")
+
+      Runs.fail(Runs.get_run!("shop-5-1"), %{error: "x"})
+      assert has_element?(view, "#open-shop-5-1")
+      assert has_element?(view, "#runs-count", "2 of 5 runs")
+    end
+
+    test "a run that leaves the filter is removed", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/?status=running")
+      assert has_element?(view, "#open-shop-1-1")
+
+      Runs.fail(Runs.get_run!("shop-1-1"), %{error: "x"})
+      refute has_element?(view, "#open-shop-1-1")
+      assert has_element?(view, "#runs-count", "0 of 4 runs")
+      assert has_element?(view, "#filter-count-failed", "2")
+
+      send(view.pid, :tick)
+      refute has_element?(view, "#open-shop-1-1")
+    end
+  end
+
+  test "without any runs the empty state says so", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/?status=failed")
+    assert has_element?(view, "#runs-empty", "No runs yet.")
+  end
+
   test "refreshes the rows of runs under way on a tick", %{conn: conn, project: project} do
     run_fixture(project, "shop-1", %{status: :running})
     {:ok, view, _html} = live(conn, ~p"/")
