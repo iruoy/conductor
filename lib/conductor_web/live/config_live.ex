@@ -21,7 +21,7 @@ defmodule ConductorWeb.ConfigLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_page={:config}>
+    <Layouts.app flash={@flash} current_page={:config} waiting_count={@waiting_count}>
       <div class="space-y-3 p-3">
         <section id="settings" class="rounded-lg border border-base-300 bg-base-100">
           <header class="flex h-11 items-center gap-3 border-b border-base-300 px-4">

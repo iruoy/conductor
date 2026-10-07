@@ -6,8 +6,7 @@ defmodule ConductorWeb.DashboardLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Runs.subscribe()
-
+    # The "runs" topic is subscribed by the ConductorWeb.WaitingCount hook of the live session.
     {:ok,
      socket
      |> assign(page_title: "Runs", selected: nil, log_seq: 0)
@@ -18,7 +17,7 @@ defmodule ConductorWeb.DashboardLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_page={:runs}>
+    <Layouts.app flash={@flash} current_page={:runs} waiting_count={@waiting_count}>
       <div class="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
         <.header>
           Runs

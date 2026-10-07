@@ -22,7 +22,7 @@ defmodule ConductorWeb.RunLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_page={:runs}>
+    <Layouts.app flash={@flash} current_page={:runs} waiting_count={@waiting_count}>
       <%!-- Fills the window below the header (2.5rem and its border), padding included, so the
       transcript scrolls in its own frame and the run's header, questions and tabs stay in view. --%>
       <div id="run" class="flex h-[calc(100dvh-2.5rem-1px)] flex-col gap-6 p-4 sm:p-6">
@@ -228,6 +228,10 @@ defmodule ConductorWeb.RunLive do
   end
 
   @impl true
+  def handle_info({:run_updated, %{id: id}}, %{assigns: %{run: %{id: other}}} = socket)
+      when id != other,
+      do: {:noreply, socket}
+
   def handle_info({:run_updated, run}, socket) do
     run = Runs.get_run!(run.id)
     socket = if Run.terminal?(run), do: socket |> close_tail() |> assign(inbox: []), else: socket

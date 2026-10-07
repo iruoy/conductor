@@ -36,6 +36,10 @@ defmodule ConductorWeb.Layouts do
     values: [nil, :runs, :config],
     doc: "the page the nav marks as current"
 
+  attr :waiting_count, :integer,
+    default: 0,
+    doc: "the number of runs waiting for input, shown next to the Runs link"
+
   slot :actions, doc: "page actions, shown on the right of the header before the theme switch"
   slot :inner_block, required: true
 
@@ -56,6 +60,16 @@ defmodule ConductorWeb.Layouts do
           class="rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
         >
           Runs
+          <span
+            :if={@waiting_count > 0}
+            id="nav-waiting-count"
+            title={
+              ngettext("1 run waiting for input", "%{count} runs waiting for input", @waiting_count)
+            }
+            class="ml-1 rounded-full bg-chip-warning-bg px-1.5 text-xs font-medium text-chip-warning-fg"
+          >
+            {@waiting_count}
+          </span>
         </.link>
         <.link
           id="nav-config"

@@ -17,9 +17,11 @@ defmodule ConductorWeb.Router do
   scope "/", ConductorWeb do
     pipe_through :browser
 
-    live "/", DashboardLive
-    live "/runs/:id", RunLive
-    live "/config", ConfigLive
+    live_session :default, on_mount: ConductorWeb.WaitingCount do
+      live "/", DashboardLive
+      live "/runs/:id", RunLive
+      live "/config", ConfigLive
+    end
   end
 
   # Other scopes may use custom stacks.

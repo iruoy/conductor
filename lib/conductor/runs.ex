@@ -52,6 +52,11 @@ defmodule Conductor.Runs do
     Run |> Ash.Query.filter(status in ^@active) |> Ash.count!()
   end
 
+  @doc "Runs that wait for a human to answer."
+  def waiting_count do
+    Run |> Ash.Query.filter(status == :waiting_for_input) |> Ash.count!()
+  end
+
   def next_queued do
     Run
     |> Ash.Query.filter(status == :picked_up)
