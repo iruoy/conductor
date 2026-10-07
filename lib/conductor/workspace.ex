@@ -96,19 +96,104 @@ defmodule Conductor.Workspace do
 
       true ->
         timeout = Application.get_env(:conductor, :setup_timeout_seconds, 1800)
-        args = ["--kill-after=10", "#{timeout}", "bash", "-lc", repo.setup_script]
 
-        case System.cmd("timeout", args, cd: path, stderr_to_stdout: true, env: git_env()) do
-          {output, 0} ->
+        case run_setup(repo.setup_script, path, timeout) do
+          {:ok, output} ->
             File.write!(marker, "")
             {:ok, output}
 
-          {output, 124} ->
+          {:error, :timeout, output} ->
             {:error, "setup script timed out after #{timeout}s:\n#{tail(output)}"}
 
-          {output, status} ->
+          {:error, {:exit_status, status}, output} ->
             {:error, "setup script exited with #{status}:\n#{tail(output)}"}
+
+          {:error, reason, output} ->
+            {:error, "setup script failed: #{inspect(reason)}:\n#{tail(output)}"}
         end
+    end
+  end
+
+  defp run_setup(script, path, timeout) do
+    opts = [
+      :monitor,
+      :stdout,
+      :kill_group,
+      {:stderr, :stdout},
+      {:group, 0},
+      {:kill_timeout, 10},
+      {:cd, path},
+      {:env, git_env()}
+    ]
+
+    bash = System.find_executable("bash")
+
+    result =
+      if bash do
+        :exec.run([bash, "-lc", script], opts)
+      else
+        {:error, :bash_not_found}
+      end
+
+    case result do
+      {:ok, pid, os_pid} ->
+        deadline = System.monotonic_time(:millisecond) + round(timeout * 1000)
+
+        try do
+          collect_setup(pid, os_pid, deadline, [], false)
+        after
+          :exec.stop(os_pid)
+        end
+
+      {:error, reason} ->
+        {:error, reason, ""}
+    end
+  end
+
+  defp collect_setup(pid, os_pid, deadline, chunks, timed_out?) do
+    remaining = max(0, deadline - System.monotonic_time(:millisecond))
+
+    if remaining == 0 do
+      stop_setup(pid, os_pid, chunks, timed_out?)
+    else
+      receive do
+        {:stdout, ^os_pid, data} ->
+          collect_setup(pid, os_pid, deadline, [data | chunks], timed_out?)
+
+        {:DOWN, ^os_pid, :process, ^pid, reason} ->
+          output = chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
+          case {timed_out?, reason} do
+            {true, _} ->
+              {:error, :timeout, output}
+
+            {false, :normal} ->
+              {:ok, output}
+
+            {false, {:exit_status, status}} ->
+              case :exec.status(status) do
+                {:status, code} -> {:error, {:exit_status, code}, output}
+                signal -> {:error, signal, output}
+              end
+
+            {false, reason} ->
+              {:error, reason, output}
+          end
+      after
+        remaining -> stop_setup(pid, os_pid, chunks, timed_out?)
+      end
+    end
+  end
+
+  defp stop_setup(pid, os_pid, chunks, timed_out?) do
+    :exec.stop(os_pid)
+
+    if timed_out? do
+      output = chunks |> Enum.reverse() |> IO.iodata_to_binary()
+      {:error, :timeout, output}
+    else
+      deadline = System.monotonic_time(:millisecond) + 11_000
+      collect_setup(pid, os_pid, deadline, chunks, true)
     end
   end
 
