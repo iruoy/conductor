@@ -138,25 +138,49 @@ defmodule ConductorWeb.RunLive do
         <div
           :if={@open_questions != [] or not Run.terminal?(@run)}
           id="prompt-bar"
-          class="shrink-0 border-t border-base-300 bg-base-100 px-3 py-2"
+          class={[
+            "shrink-0 border-t border-base-300 px-3 py-2",
+            if(@open_questions != [],
+              do: "bg-row-waiting shadow-[inset_0_2px_0_var(--dot-orange)]",
+              else: "bg-base-100"
+            )
+          ]}
         >
           <%= case @open_questions do %>
             <% [q | more] -> %>
-              <.chat_prompt id={"answer-#{q.qid}"} phx-submit="answer" placeholder="Your answer">
+              <.chat_prompt
+                id={"answer-#{q.qid}"}
+                phx-submit="answer"
+                placeholder="Your answer"
+                submit="Answer"
+                accent
+              >
                 <:header>
-                  <div id={"question-#{q.qid}"} class="flex items-start gap-2">
+                  <div id={"question-#{q.qid}"} class="flex items-start gap-1.5">
                     <.icon
                       name="hero-chat-bubble-left-ellipsis-micro"
-                      class="mt-0.5 size-4 shrink-0 text-warning"
+                      class="mt-px size-4 shrink-0 text-warning"
                     />
                     <div class="min-w-0">
-                      <div class="text-xs font-medium text-warning">
+                      <div class="text-[11px] font-medium text-chip-warning-fg">
                         The agent asks
-                        <span :if={more != []} id="questions-more" class="font-normal">
+                        <span class="font-normal text-fg-secondary">
+                          · {local_time(q.inserted_at)}
+                        </span>
+                        <span
+                          :if={more != []}
+                          id="questions-more"
+                          class="font-normal text-fg-secondary"
+                        >
                           · {length(more)} more after this
                         </span>
                       </div>
-                      <p class="max-h-40 overflow-y-auto whitespace-pre-wrap">{q.text}</p>
+                      <label
+                        for={"answer-#{q.qid}-text"}
+                        class="block max-h-40 overflow-y-auto whitespace-pre-wrap"
+                      >
+                        {q.text}
+                      </label>
                     </div>
                   </div>
                 </:header>
@@ -167,7 +191,9 @@ defmodule ConductorWeb.RunLive do
                 :if={not Run.terminal?(@run)}
                 id="prompt"
                 phx-submit="message"
+                label="Message the head agent"
                 placeholder={prompt_placeholder(@run.status, head?(@conversations, @selected))}
+                hint="Waits in the agent's inbox until the tools that are running are done."
                 on_stop={@run.status != :handing_off && show_modal("confirm-abort")}
                 disabled={@run.status != :running}
               >
@@ -176,7 +202,7 @@ defmodule ConductorWeb.RunLive do
                     <li
                       :for={%{"id" => id} <- @inbox}
                       id={"inbox-#{id}"}
-                      class="flex items-center gap-2 text-base-content/60"
+                      class="flex items-center gap-2 text-fg-secondary"
                     >
                       <.icon name="hero-clock-micro" class="size-4 shrink-0" />
                       <span class="min-w-0 truncate">{@sent[id] || "A message"}</span>

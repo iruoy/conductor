@@ -423,6 +423,54 @@ defmodule ConductorWeb.RunLiveTest do
       assert has_element?(view, "#prompt-bar form#answer-q1 #question-q1", "Which way?")
     end
 
+    test "the question is the label of the answer field, and the answer is sent", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-61", %{status: :waiting_for_input})
+      {:ok, _} = Runs.upsert_question(run.id, "q1", "Which way?")
+      {:ok, _} = Runs.upsert_question(run.id, "q2", "And then?")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#prompt-bar.bg-row-waiting")
+      assert has_element?(view, "#question-q1", "The agent asks")
+      assert has_element?(view, "#questions-more", "1 more after this")
+      assert has_element?(view, "#answer-q1 label[for=answer-q1-text]", "Which way?")
+      assert has_element?(view, "#answer-q1 textarea#answer-q1-text[placeholder='Your answer']")
+      assert has_element?(view, "#answer-q1 button[type=submit]", "Answer")
+      refute has_element?(view, "#prompt")
+
+      # The form still submits the answer event (the answer itself is covered by the first test).
+      assert view |> form("#answer-q1", %{"text" => "left"}) |> render_submit()
+    end
+
+    test "the message field has a label, a hint and a Send button", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-62", %{status: :running})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#prompt-bar.bg-base-100")
+      assert has_element?(view, "#prompt label[for=prompt-text]", "Message the head agent")
+      assert has_element?(view, "#prompt textarea#prompt-text:not([disabled])")
+      assert has_element?(view, "#prompt button[type=submit]", "Send")
+      assert has_element?(view, "#prompt-hint", "Waits in the agent's inbox")
+      assert has_element?(view, "#prompt-stop")
+    end
+
+    test "the message field is disabled until the run is running", %{conn: conn, project: project} do
+      run = run_fixture(project, "shop-63", %{status: :picked_up})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#prompt textarea[disabled]")
+      assert has_element?(view, "#prompt-stop")
+      refute has_element?(view, "#prompt-submit")
+    end
+
     test "a failed run: the error banner, Retry, the pull request and the other attempts", %{
       conn: conn,
       project: project

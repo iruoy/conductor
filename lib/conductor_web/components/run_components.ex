@@ -723,6 +723,14 @@ defmodule ConductorWeb.RunComponents do
   attr :id, :string, required: true
   attr :placeholder, :string, default: nil
 
+  attr :label, :string,
+    default: nil,
+    doc: "the label of the field when no header is one; it is not shown"
+
+  attr :submit, :string, default: "Send", doc: "what the submit button says"
+  attr :accent, :boolean, default: false, doc: "the submit button stands out, as for a question"
+  attr :hint, :string, default: nil, doc: "a line under the field"
+
   attr :disabled, :boolean,
     default: false,
     doc: "there is nothing to say now, as before the agent starts"
@@ -730,43 +738,41 @@ defmodule ConductorWeb.RunComponents do
   attr :on_stop, :any, default: nil, doc: "what the stop button does; without it there is none"
 
   attr :rest, :global, include: ~w(phx-submit)
-  slot :header, doc: "what the prompt is for, as the question it answers"
+
+  slot :header,
+    doc: "what the prompt is for, as the question it answers; its label points at the field"
+
   slot :inner_block, doc: "hidden fields to send along"
 
   @doc """
-  The prompt under a transcript: a text that grows with what is typed, sent with Enter (Shift+Enter starts a new
-  line; Escape leaves the field). While the agent works there is a button to stop it as well.
+  The prompt under a transcript, a bar across the page: a field that grows with what is typed, sent with Enter
+  (Shift+Enter starts a new line; Escape leaves the field). While the agent works there is a button to stop it as well.
   """
   def chat_prompt(assigns) do
     ~H"""
-    <form
-      id={@id}
-      phx-hook=".ChatPrompt"
-      class="mx-auto flex w-full max-w-4xl flex-col gap-2 rounded-2xl border border-base-300 bg-base-100 px-2.5 py-2 transition-colors has-[textarea:focus-visible]:border-primary"
-      {@rest}
-    >
-      <div :if={@header != []} data-prompt-header class="px-1.5 pt-1 text-sm">
+    <form id={@id} phx-hook=".ChatPrompt" class="flex w-full flex-col gap-1.5" {@rest}>
+      <div :if={@header != []} data-prompt-header>
         {render_slot(@header)}
       </div>
       {render_slot(@inner_block)}
-      <textarea
-        id={"#{@id}-text"}
-        name="text"
-        rows="1"
-        required
-        disabled={@disabled}
-        placeholder={@placeholder}
-        aria-label={@placeholder}
-        class="textarea textarea-ghost max-h-48 min-h-0 w-full resize-none px-1.5 py-1 focus:bg-transparent focus:outline-none disabled:bg-transparent"
-      ></textarea>
-      <div class="flex items-center justify-end gap-1.5">
+      <div class="flex items-end gap-1.5">
+        <label :if={@label} for={"#{@id}-text"} class="sr-only">{@label}</label>
+        <textarea
+          id={"#{@id}-text"}
+          name="text"
+          rows="1"
+          required
+          disabled={@disabled}
+          placeholder={@placeholder}
+          class="max-h-48 min-h-7 min-w-0 flex-1 resize-none rounded border border-line-strong bg-base-100 px-2 py-1 text-[13px] leading-[18px] text-base-content outline-none transition-colors placeholder:text-fg-tertiary focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
+        ></textarea>
         <button
           :if={@on_stop}
           type="button"
           id={"#{@id}-stop"}
           phx-click={@on_stop}
           aria-label="Stop"
-          class="btn btn-circle btn-soft btn-sm"
+          class="btn btn-sm h-7 min-h-0 border-line-strong bg-base-100 px-2"
         >
           <.icon name="hero-stop-micro" class="size-4" />
         </button>
@@ -775,12 +781,15 @@ defmodule ConductorWeb.RunComponents do
           type="submit"
           id={"#{@id}-submit"}
           disabled={@disabled}
-          aria-label="Send"
-          class="btn btn-circle btn-primary btn-sm"
+          class={[
+            "btn btn-sm h-7 min-h-0 px-3 text-xs font-medium",
+            if(@accent, do: "btn-primary", else: "border-line-strong bg-base-100")
+          ]}
         >
-          <.icon name="hero-arrow-up-micro" class="size-4" />
+          {@submit}
         </button>
       </div>
+      <p :if={@hint} id={"#{@id}-hint"} class="text-[11px] text-fg-secondary">{@hint}</p>
     </form>
     <script :type={Phoenix.LiveView.ColocatedHook} name=".ChatPrompt">
       export default {
