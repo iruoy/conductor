@@ -124,16 +124,17 @@ defmodule ConductorWeb.RunLiveTest do
     send_entry.(4, "pi.assistant", stop)
 
     folded = "#items-ev-4-e-2-0-work > details:not([open])"
-    assert has_element?(view, folded <> " > summary", "Worked for 2m 5s · 1 steps")
+    assert has_element?(view, folded <> " > summary [data-row-text]", "Ran 1 command")
+    assert has_element?(view, folded <> " > summary [data-row-meta]", "2m 5s")
     assert has_element?(view, folded <> " [data-work] [data-from=agent]", "Looking around.")
-    assert has_element?(view, folded <> " [data-work] details", "a.ex")
+    assert has_element?(view, folded <> " [data-work] [data-tool=bash]", "a.ex")
     refute has_element?(view, "#items-ev-4-e-2-0")
     refute has_element?(view, "#items-ev-4-e-2-1")
     assert has_element?(view, "#items-ev-4-e-4-0 [data-from=agent]", "It is there.")
 
     # The same shows after a reload.
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-    assert has_element?(view, folded <> " > summary", "Worked for 2m 5s")
+    assert has_element?(view, folded <> " > summary [data-row-meta]", "2m 5s")
     assert has_element?(view, folded <> " [data-work] [data-from=agent]", "Looking around.")
     assert has_element?(view, "#items-ev-4-e-4-0 [data-from=agent]", "It is there.")
   end
@@ -157,13 +158,13 @@ defmodule ConductorWeb.RunLiveTest do
     # Nothing has come in yet: the agent is at work.
     assert has_element?(view, "#indicator .loading")
 
-    # Thinking is open and shimmers for as long as it streams, and closes when the text starts.
+    # Thinking shows as it streams in, and becomes a closed line when the text starts.
     send_event.(%{
       "type" => "message_update",
       "changes" => [%{"type" => "thinking_delta", "delta" => "Let me see"}]
     })
 
-    assert has_element?(view, "details#live-thinking[open] .skeleton-text", "Thinking…")
+    assert has_element?(view, "#live-thinking[data-thinking]", "Thinking")
     assert has_element?(view, "#live-thinking", "Let me see")
     refute has_element?(view, "#indicator")
 
@@ -211,7 +212,12 @@ defmodule ConductorWeb.RunLiveTest do
       "output" => %{"set" => "3 tests, 0 failures"}
     })
 
-    assert has_element?(view, "details#live-tool-t1[open] .skeleton-text", "bash")
+    assert has_element?(
+             view,
+             "#live-tool-t1[data-tool=bash] [data-tool-status=running]",
+             "running"
+           )
+
     assert has_element?(view, "#live-tool-t1", "3 tests, 0 failures")
     assert has_element?(view, "#tab-4", "head")
 
@@ -228,7 +234,7 @@ defmodule ConductorWeb.RunLiveTest do
       send_event.(%{"type" => "message_end", "entry" => entry})
     end
 
-    assert has_element?(view, "#items-ev-4-e-1-0 details", "all green")
+    assert has_element?(view, "#items-ev-4-e-1-0 [data-tool=bash]", "all green")
     refute has_element?(view, "#items-ev-4-e-2")
 
     # What the agent does between two texts is one group of steps, which says what goes on while it works.
@@ -238,18 +244,19 @@ defmodule ConductorWeb.RunLiveTest do
     entry = %{"id" => 4, "kind" => "pi.assistant", "model" => [message]}
     send_event.(%{"type" => "message_end", "entry" => entry})
 
-    assert has_element?(view, "#items-ev-4-e-1-0 > details:not([open]) > summary", "3 steps")
+    summary = "#items-ev-4-e-1-0 > details:not([open]) > summary"
+    assert has_element?(view, summary <> " [data-row-text]", "Running commands")
+    assert has_element?(view, summary <> " > [data-pulse]")
 
-    assert has_element?(
-             view,
-             "#items-ev-4-e-1-0 > details > summary .skeleton-text",
-             "Running commands"
-           )
-
-    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] details", "all green")
+    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] [data-tool=bash]", "all green")
     assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] details", "So it works.")
     # The call without a result is the one that runs.
-    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] .skeleton-text", "bash")
+    assert has_element?(
+             view,
+             "#items-ev-4-e-1-0 [data-steps] [data-tool-status=running]",
+             "running"
+           )
+
     refute has_element?(view, "#items-ev-4-e-4-0")
 
     # The agent goes on after a tool result, until a message that calls no tool; that closes the group.
@@ -258,8 +265,8 @@ defmodule ConductorWeb.RunLiveTest do
     done = %{"content" => [%{"type" => "text", "text" => "Done."}], "stopReason" => "stop"}
     entry = %{"id" => 5, "kind" => "pi.assistant", "model" => [done]}
     send_event.(%{"type" => "message_end", "entry" => entry})
-    assert has_element?(view, "#items-ev-4-e-1-0 > details > summary", "Ran commands")
-    refute has_element?(view, "#items-ev-4-e-1-0 > details > summary .skeleton-text")
+    assert has_element?(view, summary <> " [data-row-text]", "Thought, ran 2 commands")
+    refute has_element?(view, summary <> " > [data-pulse]")
 
     assert has_element?(
              view,
@@ -280,7 +287,7 @@ defmodule ConductorWeb.RunLiveTest do
     entry = %{"id" => 7, "kind" => "pi.tool-result", "model" => [result]}
     send_event.(%{"type" => "message_end", "entry" => entry})
 
-    assert has_element?(view, "#items-ev-4-e-6-0 summary", "lib/a.ex")
+    assert has_element?(view, "#items-ev-4-e-6-0 [data-tool=edit] [data-tool-call]", "lib/a.ex")
     # Each line has its number in the old file and in the new one.
     lines =
       view
@@ -299,8 +306,8 @@ defmodule ConductorWeb.RunLiveTest do
 
     # The same shows after a reload.
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-    assert has_element?(view, "#items-ev-4-e-1-0 > details:not([open]) > summary", "3 steps")
-    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] details", "all green")
+    assert has_element?(view, summary <> " [data-row-text]", "Thought, ran 2 commands")
+    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] [data-tool=bash]", "all green")
     refute has_element?(view, "#items-ev-4-e-2")
     refute has_element?(view, "#items-ev-4-e-4-0")
   end
