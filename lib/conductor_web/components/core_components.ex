@@ -226,7 +226,7 @@ defmodule ConductorWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset min-w-0">
       <label for={@id}>
         <input
           type="hidden"
@@ -235,14 +235,14 @@ defmodule ConductorWeb.CoreComponents do
           disabled={@rest[:disabled]}
           form={@rest[:form]}
         />
-        <span class="label">
+        <span class="label text-[13px] text-base-content">
           <input
             type="checkbox"
             id={@id}
             name={@name}
             value="true"
             checked={@checked}
-            class={@class || "checkbox checkbox-sm"}
+            class={@class || "checkbox checkbox-xs"}
             {@rest}
           />{@label}
         </span>
@@ -254,13 +254,16 @@ defmodule ConductorWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset min-w-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-0.5 block text-[11px] text-fg-secondary">{@label}</span>
         <select
           id={@id}
           name={@name}
-          class={[@class || "w-full select", @errors != [] && (@error_class || "select-error")]}
+          class={[
+            @class || "select select-sm h-7 min-h-0 w-full text-[13px]",
+            @errors != [] && (@error_class || "select-error")
+          ]}
           multiple={@multiple}
           {@rest}
         >
@@ -275,14 +278,14 @@ defmodule ConductorWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset min-w-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-0.5 block text-[11px] text-fg-secondary">{@label}</span>
         <textarea
           id={@id}
           name={@name}
           class={[
-            @class || "w-full textarea",
+            @class || "textarea textarea-sm w-full font-mono text-[13px]",
             @errors != [] && (@error_class || "textarea-error")
           ]}
           {@rest}
@@ -296,16 +299,16 @@ defmodule ConductorWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset min-w-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-0.5 block text-[11px] text-fg-secondary">{@label}</span>
         <input
           type={@type}
           name={@name}
           id={@id}
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
           class={[
-            @class || "w-full input",
+            @class || "input input-sm h-7 min-h-0 w-full text-[13px]",
             @errors != [] && (@error_class || "input-error")
           ]}
           {@rest}
@@ -319,8 +322,8 @@ defmodule ConductorWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
-      <.icon name="hero-exclamation-circle" class="size-5" />
+    <p class="mt-1 flex items-center gap-1.5 text-xs text-error">
+      <.icon name="hero-exclamation-circle" class="size-4" />
       {render_slot(@inner_block)}
     </p>
     """
@@ -381,26 +384,31 @@ defmodule ConductorWeb.CoreComponents do
       end
 
     ~H"""
-    <table class="table table-zebra">
+    <table class="table table-sm w-full">
       <thead>
         <tr>
-          <th :for={col <- @col}>{col[:label]}</th>
+          <th
+            :for={col <- @col}
+            class="h-8 px-4 text-[11px] font-medium tracking-wide text-fg-tertiary uppercase"
+          >
+            {col[:label]}
+          </th>
           <th :if={@action != []}>
             <span class="sr-only">{gettext("Actions")}</span>
           </th>
         </tr>
       </thead>
       <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
-        <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
+        <tr :for={row <- @rows} id={@row_id && @row_id.(row)} class="hover:bg-row-hover">
           <td
             :for={col <- @col}
             phx-click={@row_click && @row_click.(row)}
-            class={@row_click && "hover:cursor-pointer"}
+            class={["h-9 px-4", @row_click && "hover:cursor-pointer"]}
           >
             {render_slot(col, @row_item.(row))}
           </td>
-          <td :if={@action != []} class="w-0 font-semibold">
-            <div class="flex gap-4">
+          <td :if={@action != []} class="h-9 w-0 px-4">
+            <div class="flex items-center justify-end gap-3">
               <%= for action <- @action do %>
                 {render_slot(action, @row_item.(row))}
               <% end %>
