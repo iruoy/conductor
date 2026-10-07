@@ -37,7 +37,9 @@ defmodule ConductorWeb.DashboardLive do
     {:noreply,
      socket
      |> assign(group: group, text: text, now: DateTime.utc_now())
-     |> load_runs()}
+     |> load_runs()
+     # A new filter puts the keyboard cursor back on the first row.
+     |> push_event("runs:reset-cursor", %{})}
   end
 
   @impl true
@@ -125,7 +127,13 @@ defmodule ConductorWeb.DashboardLive do
           </.form>
         </div>
         <div class="flex min-h-0 flex-1 flex-wrap">
-          <div id="runs-table" class="min-w-0 flex-[999_1_640px] overflow-x-auto">
+          <div
+            id="runs-table"
+            phx-hook=".RunsKeys"
+            tabindex="0"
+            aria-label="Runs. j and k move, Enter opens, l shows the live log"
+            class="min-w-0 flex-[999_1_640px] overflow-x-auto -outline-offset-2"
+          >
             <table class="w-full border-collapse text-[13px]">
               <thead>
                 <tr class="text-left text-[11px] uppercase tracking-[0.04em] text-fg-secondary *:border-b *:border-base-300 *:bg-surface-2 *:py-1.5 *:font-medium">
@@ -143,7 +151,7 @@ defmodule ConductorWeb.DashboardLive do
                   id={dom_id}
                   data-status={run.status}
                   class={[
-                    "h-[30px] border-b border-muted transition-colors hover:bg-row-hover",
+                    "h-[30px] border-b border-muted transition-colors hover:bg-row-hover data-cursor:bg-row-selected",
                     cond do
                       @selected == run.id -> "bg-row-selected"
                       run.status == :waiting_for_input -> "bg-row-waiting"
@@ -265,6 +273,108 @@ defmodule ConductorWeb.DashboardLive do
             >
               {if @total_count == 0, do: "No runs yet.", else: "No runs match this filter."}
             </p>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".RunsKeys">
+              // The keyboard cursor lives on the client: a `data-cursor` attribute on one row.
+              // Moving it never touches the server. LiveView patches (stream inserts, resets)
+              // can drop the attribute, so a MutationObserver puts it back by run id, or on the
+              // nearest row when that run is gone, or on the first row.
+              const editable = (el) =>
+                el instanceof Element &&
+                el.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")
+
+              export default {
+                mounted() {
+                  this.cursorId = null
+                  this.cursorIndex = 0
+
+                  this.onKey = (event) => {
+                    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return
+                    if (editable(event.target) || document.querySelector("dialog[open]")) return
+
+                    const rows = this.rows()
+                    if (rows.length === 0) return
+
+                    switch (event.key) {
+                      case "j":
+                      case "ArrowDown":
+                        event.preventDefault()
+                        this.move(rows, 1)
+                        break
+                      case "k":
+                      case "ArrowUp":
+                        event.preventDefault()
+                        this.move(rows, -1)
+                        break
+                      case "Enter": {
+                        // A focused link or button handles Enter itself.
+                        if (event.target.closest("a, button, summary")) return
+                        const link = this.current(rows)?.querySelector("a[id^=open-]")
+                        if (link) { event.preventDefault(); link.click() }
+                        break
+                      }
+                      case "l": {
+                        const toggle = this.current(rows)?.querySelector("button[id^=log-]")
+                        if (toggle) { event.preventDefault(); toggle.click() }
+                        break
+                      }
+                    }
+                  }
+                  window.addEventListener("keydown", this.onKey)
+
+                  this.handleEvent("runs:reset-cursor", () => {
+                    this.cursorId = null
+                    this.cursorIndex = 0
+                    this.apply()
+                  })
+
+                  this.observer = new MutationObserver(() => this.apply())
+                  this.observer.observe(this.el, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ["data-cursor"]
+                  })
+                  this.apply()
+                },
+                updated() { this.apply() },
+                destroyed() {
+                  window.removeEventListener("keydown", this.onKey)
+                  this.observer.disconnect()
+                },
+                rows() { return Array.from(this.el.querySelectorAll("#runs > tr")) },
+                current(rows) {
+                  return rows.find((row) => row.id === this.cursorId) || rows[0]
+                },
+                move(rows, step) {
+                  const from = Math.max(rows.indexOf(this.current(rows)), 0)
+                  const to = Math.min(Math.max(from + step, 0), rows.length - 1)
+                  this.cursorId = rows[to].id
+                  this.cursorIndex = to
+                  this.apply()
+                  rows[to].scrollIntoView({block: "nearest"})
+                },
+                // Idempotent, so the observer does not loop on its own changes.
+                apply() {
+                  const rows = this.rows()
+                  if (rows.length === 0) return
+
+                  let row = rows.find((r) => r.id === this.cursorId)
+                  if (!row) {
+                    row = rows[Math.min(this.cursorIndex, rows.length - 1)]
+                    this.cursorId = row.id
+                  }
+                  this.cursorIndex = rows.indexOf(row)
+
+                  for (const r of rows) {
+                    if (r === row) {
+                      if (!r.hasAttribute("data-cursor")) r.setAttribute("data-cursor", "")
+                    } else if (r.hasAttribute("data-cursor")) {
+                      r.removeAttribute("data-cursor")
+                    }
+                  }
+                }
+              }
+            </script>
           </div>
 
           <section
@@ -309,8 +419,14 @@ defmodule ConductorWeb.DashboardLive do
 
         <footer
           id="runs-footer"
-          class="flex h-[26px] items-center justify-end gap-3 border-t border-base-300 bg-surface-2 px-3 text-[11px] text-fg-secondary"
+          class="flex h-[26px] items-center gap-3 border-t border-base-300 bg-surface-2 px-3 text-[11px] text-fg-secondary"
         >
+          <span id="runs-hints" class="flex items-center gap-3">
+            <span><kbd class="kbd kbd-xs">j</kbd> <kbd class="kbd kbd-xs">k</kbd> move</span>
+            <span><kbd class="kbd kbd-xs">↵</kbd> open</span>
+            <span><kbd class="kbd kbd-xs">l</kbd> live log</span>
+          </span>
+          <span class="flex-1"></span>
           <span id="runs-count">{@shown_count} of {@total_count} runs</span>
         </footer>
       </div>

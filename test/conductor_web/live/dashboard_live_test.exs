@@ -137,6 +137,28 @@ defmodule ConductorWeb.DashboardLiveTest do
     assert has_element?(view, "#duration-shop-6-1", "<1m")
   end
 
+  test "the table is a focusable region for the keyboard, with hints in the footer", %{
+    conn: conn,
+    project: project
+  } do
+    run_fixture(project, "shop-1", %{status: :running})
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    assert has_element?(
+             view,
+             ~s|#runs-table[phx-hook$="RunsKeys"][tabindex="0"][aria-label*="Enter opens"]|
+           )
+
+    # What the keys click on: the open link and the log toggle of each row.
+    assert has_element?(view, ~s|#runs > tr a[id^="open-"]|)
+    assert has_element?(view, ~s|#runs > tr button[id^="log-"]|)
+    assert has_element?(view, "#runs-hints kbd", "j")
+    assert has_element?(view, "#runs-hints kbd", "k")
+    assert has_element?(view, "#runs-hints kbd", "↵")
+    assert has_element?(view, "#runs-hints kbd", "l")
+    assert has_element?(view, "#runs-count", "1 of 1 runs")
+  end
+
   test "shows the empty state and counts runs as they come in", %{conn: conn, project: project} do
     {:ok, view, _html} = live(conn, ~p"/")
     assert has_element?(view, "#runs-empty")
