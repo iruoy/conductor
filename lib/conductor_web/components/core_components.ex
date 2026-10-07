@@ -62,7 +62,7 @@ defmodule ConductorWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
-      phx-hook={@kind == :info && ".AutoDismiss"}
+      phx-hook={@kind == :info && "#{__MODULE__}.AutoDismiss"}
       role="alert"
       class="toast toast-top toast-end z-50"
       {@rest}
