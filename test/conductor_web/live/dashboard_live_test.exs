@@ -14,6 +14,30 @@ defmodule ConductorWeb.DashboardLiveTest do
     %{project: project}
   end
 
+  test "the live log opens beside the table and closes from the panel and from the row", %{
+    conn: conn,
+    project: project
+  } do
+    run_fixture(project, "shop-1", %{status: :running})
+    {:ok, view, _html} = live(conn, ~p"/")
+    refute has_element?(view, "#live-log")
+    assert has_element?(view, ~s|#log-shop-1-1[aria-pressed="false"]|)
+
+    view |> element("#log-shop-1-1") |> render_click()
+    assert has_element?(view, ~s|#live-log a[href="/runs/shop-1-1"]|)
+    assert has_element?(view, "#log-empty")
+    assert has_element?(view, ~s|#log-shop-1-1[aria-pressed="true"]|)
+
+    view |> element("#log-close") |> render_click()
+    refute has_element?(view, "#live-log")
+    assert has_element?(view, ~s|#log-shop-1-1[aria-pressed="false"]|)
+
+    view |> element("#log-shop-1-1") |> render_click()
+    assert has_element?(view, "#live-log")
+    view |> element("#log-shop-1-1") |> render_click()
+    refute has_element?(view, "#live-log")
+  end
+
   test "lists runs, streams the live log, and retries", %{conn: conn, project: project} do
     run = run_fixture(project, "shop-1", %{status: :failed, error: "boom"})
     {:ok, view, html} = live(conn, ~p"/")

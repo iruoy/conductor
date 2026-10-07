@@ -124,181 +124,188 @@ defmodule ConductorWeb.DashboardLive do
             </label>
           </.form>
         </div>
-        <div id="runs-table" class="flex-1 overflow-x-auto">
-          <table class="w-full border-collapse text-[13px]">
-            <thead>
-              <tr class="text-left text-[11px] uppercase tracking-[0.04em] text-fg-secondary *:border-b *:border-base-300 *:bg-surface-2 *:py-1.5 *:font-medium">
-                <th class="px-3">Run</th>
-                <th class="px-2">Issue</th>
-                <th class="px-2">Status</th>
-                <th class="px-2 text-right">Duration</th>
-                <th class="px-2 text-right">Updated</th>
-                <th class="px-3"><span class="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody id="runs" phx-update="stream">
-              <tr
-                :for={{dom_id, run} <- @streams.runs}
-                id={dom_id}
-                data-status={run.status}
-                class={[
-                  "h-[30px] border-b border-muted transition-colors hover:bg-row-hover",
-                  cond do
-                    @selected == run.id -> "bg-row-selected"
-                    run.status == :waiting_for_input -> "bg-row-waiting"
-                    true -> nil
-                  end
-                ]}
-              >
-                <td class={[
-                  "whitespace-nowrap px-3 font-mono text-xs",
-                  run.status == :waiting_for_input && "shadow-[inset_3px_0_0_var(--dot-orange)]"
-                ]}>
-                  <.link
-                    id={"open-#{run.id}"}
-                    navigate={~p"/runs/#{run.id}"}
-                    class="text-link hover:text-link-hover hover:underline"
-                  >{run.id}</.link>
-                </td>
-                <td class={[
-                  "max-w-[380px] truncate px-2",
-                  run.status == :waiting_for_input && "font-medium"
-                ]}>
-                  {(run.issue_snapshot || %{})["summary"]}
-                </td>
-                <td class="whitespace-nowrap px-2">
-                  <.status_badge id={"status-#{run.id}"} status={run.status} />
-                  <a
-                    :if={run.pr_url}
-                    id={"pr-#{run.id}"}
-                    href={run.pr_url}
-                    target="_blank"
-                    class="ml-1.5 inline-flex items-center gap-[3px] align-middle text-xs text-link hover:text-link-hover hover:underline"
-                  >
-                    <.icon name="hero-arrow-top-right-on-square-micro" class="size-3" />
-                    {pr_label(run.pr_url)}
-                  </a>
-                  <.link
-                    :if={run.status == :waiting_for_input}
-                    id={"answer-#{run.id}"}
-                    navigate={~p"/runs/#{run.id}"}
-                    class="ml-1.5 inline-flex h-5 items-center rounded border border-dot-orange px-2 align-middle text-[11px] font-medium text-chip-warning-fg transition-colors hover:bg-chip-warning-bg"
-                  >
-                    Answer
-                  </.link>
-                  <span
-                    :if={run.status == :failed && run.error}
-                    id={"error-#{run.id}"}
-                    title={run.error}
-                    class="ml-1.5 inline-block max-w-xs truncate align-middle text-xs text-chip-error-fg"
-                  >
-                    {run.error}
-                  </span>
-                </td>
-                <td
-                  id={"duration-#{run.id}"}
+        <div class="flex min-h-0 flex-1 flex-wrap">
+          <div id="runs-table" class="min-w-0 flex-[999_1_640px] overflow-x-auto">
+            <table class="w-full border-collapse text-[13px]">
+              <thead>
+                <tr class="text-left text-[11px] uppercase tracking-[0.04em] text-fg-secondary *:border-b *:border-base-300 *:bg-surface-2 *:py-1.5 *:font-medium">
+                  <th class="px-3">Run</th>
+                  <th class="px-2">Issue</th>
+                  <th class="px-2">Status</th>
+                  <th class="px-2 text-right">Duration</th>
+                  <th class="px-2 text-right">Updated</th>
+                  <th class="px-3"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody id="runs" phx-update="stream">
+                <tr
+                  :for={{dom_id, run} <- @streams.runs}
+                  id={dom_id}
+                  data-status={run.status}
                   class={[
-                    "whitespace-nowrap px-2 text-right text-xs tabular-nums",
-                    if(under_way?(run), do: "text-base-content", else: "text-fg-secondary")
+                    "h-[30px] border-b border-muted transition-colors hover:bg-row-hover",
+                    cond do
+                      @selected == run.id -> "bg-row-selected"
+                      run.status == :waiting_for_input -> "bg-row-waiting"
+                      true -> nil
+                    end
                   ]}
                 >
-                  {run_duration(run, @now)}
-                </td>
-                <td
-                  id={"updated-#{run.id}"}
-                  class="whitespace-nowrap px-2 text-right text-xs tabular-nums text-fg-secondary"
-                >
-                  {local_time(run.updated_at)}
-                </td>
-                <td class="whitespace-nowrap py-0 pl-1 pr-2 text-right">
-                  <div class="inline-flex items-center gap-0.5">
-                    <button
-                      :if={run.status == :failed}
-                      id={"retry-#{run.id}"}
-                      type="button"
-                      phx-click="retry"
-                      phx-value-id={run.id}
-                      class="btn btn-ghost h-6 min-h-0 px-1.5 text-xs font-normal"
+                  <td class={[
+                    "whitespace-nowrap px-3 font-mono text-xs",
+                    run.status == :waiting_for_input && "shadow-[inset_3px_0_0_var(--dot-orange)]"
+                  ]}>
+                    <.link
+                      id={"open-#{run.id}"}
+                      navigate={~p"/runs/#{run.id}"}
+                      class="text-link hover:text-link-hover hover:underline"
+                    >{run.id}</.link>
+                  </td>
+                  <td class={[
+                    "max-w-[380px] truncate px-2",
+                    run.status == :waiting_for_input && "font-medium"
+                  ]}>
+                    {(run.issue_snapshot || %{})["summary"]}
+                  </td>
+                  <td class="whitespace-nowrap px-2">
+                    <.status_badge id={"status-#{run.id}"} status={run.status} />
+                    <a
+                      :if={run.pr_url}
+                      id={"pr-#{run.id}"}
+                      href={run.pr_url}
+                      target="_blank"
+                      class="ml-1.5 inline-flex items-center gap-[3px] align-middle text-xs text-link hover:text-link-hover hover:underline"
                     >
-                      Retry
-                    </button>
-                    <button
-                      :if={not Run.terminal?(run) and run.status != :handing_off}
-                      id={"abort-#{run.id}"}
-                      type="button"
-                      phx-click={show_modal("confirm-abort-#{run.id}")}
-                      class="btn btn-ghost h-6 min-h-0 px-1.5 text-xs font-normal text-chip-error-fg"
+                      <.icon name="hero-arrow-top-right-on-square-micro" class="size-3" />
+                      {pr_label(run.pr_url)}
+                    </a>
+                    <.link
+                      :if={run.status == :waiting_for_input}
+                      id={"answer-#{run.id}"}
+                      navigate={~p"/runs/#{run.id}"}
+                      class="ml-1.5 inline-flex h-5 items-center rounded border border-dot-orange px-2 align-middle text-[11px] font-medium text-chip-warning-fg transition-colors hover:bg-chip-warning-bg"
                     >
-                      Abort
-                    </button>
-                    <button
-                      id={"log-#{run.id}"}
-                      type="button"
-                      phx-click="select"
-                      phx-value-id={if @selected == run.id, do: "", else: run.id}
-                      aria-label={"Live log for #{run.id}"}
-                      aria-pressed={to_string(@selected == run.id)}
-                      title="Live log"
-                      class="btn btn-ghost size-6 min-h-0 p-0 text-fg-secondary aria-pressed:bg-muted aria-pressed:text-base-content"
+                      Answer
+                    </.link>
+                    <span
+                      :if={run.status == :failed && run.error}
+                      id={"error-#{run.id}"}
+                      title={run.error}
+                      class="ml-1.5 inline-block max-w-xs truncate align-middle text-xs text-chip-error-fg"
                     >
-                      <.icon name="hero-command-line-micro" class="size-3.5" />
-                    </button>
-                  </div>
-                  <.confirm_modal
-                    :if={not Run.terminal?(run) and run.status != :handing_off}
-                    id={"confirm-abort-#{run.id}"}
-                    title={"Abort #{run.id}?"}
-                    confirm="Abort"
-                    on_confirm={JS.push("abort", value: %{id: run.id})}
+                      {run.error}
+                    </span>
+                  </td>
+                  <td
+                    id={"duration-#{run.id}"}
+                    class={[
+                      "whitespace-nowrap px-2 text-right text-xs tabular-nums",
+                      if(under_way?(run), do: "text-base-content", else: "text-fg-secondary")
+                    ]}
                   >
-                    The agent stops and the run is marked as failed.
-                  </.confirm_modal>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p
-            :if={@shown_count == 0}
-            id="runs-empty"
-            class="px-3 py-6 text-center text-[13px] text-fg-secondary"
-          >
-            {if @total_count == 0, do: "No runs yet.", else: "No runs match this filter."}
-          </p>
-        </div>
-
-        <section :if={@selected} id="live-log" class="border-t border-base-300 bg-base-100">
-          <div class="flex h-8 items-center gap-1.5 border-b border-base-300 pl-3 pr-2">
-            <span class="size-1.5 rounded-full bg-dot-blue"></span>
-            <h2 class="text-xs font-semibold">Live log</h2>
-            <.link
-              navigate={~p"/runs/#{@selected}"}
-              class="font-mono text-xs text-link hover:text-link-hover hover:underline"
-            >{@selected}</.link>
-            <button
-              id="log-close"
-              type="button"
-              phx-click="select"
-              phx-value-id=""
-              aria-label="Close live log"
-              class="btn btn-ghost ml-auto size-6 min-h-0 p-0 text-fg-secondary"
+                    {run_duration(run, @now)}
+                  </td>
+                  <td
+                    id={"updated-#{run.id}"}
+                    class="whitespace-nowrap px-2 text-right text-xs tabular-nums text-fg-secondary"
+                  >
+                    {local_time(run.updated_at)}
+                  </td>
+                  <td class="whitespace-nowrap py-0 pl-1 pr-2 text-right">
+                    <div class="inline-flex items-center gap-0.5">
+                      <button
+                        :if={run.status == :failed}
+                        id={"retry-#{run.id}"}
+                        type="button"
+                        phx-click="retry"
+                        phx-value-id={run.id}
+                        class="btn btn-ghost h-6 min-h-0 px-1.5 text-xs font-normal"
+                      >
+                        Retry
+                      </button>
+                      <button
+                        :if={not Run.terminal?(run) and run.status != :handing_off}
+                        id={"abort-#{run.id}"}
+                        type="button"
+                        phx-click={show_modal("confirm-abort-#{run.id}")}
+                        class="btn btn-ghost h-6 min-h-0 px-1.5 text-xs font-normal text-chip-error-fg"
+                      >
+                        Abort
+                      </button>
+                      <button
+                        id={"log-#{run.id}"}
+                        type="button"
+                        phx-click="select"
+                        phx-value-id={if @selected == run.id, do: "", else: run.id}
+                        aria-label={"Live log for #{run.id}"}
+                        aria-pressed={to_string(@selected == run.id)}
+                        title="Live log"
+                        class="btn btn-ghost size-6 min-h-0 p-0 text-fg-secondary aria-pressed:bg-muted aria-pressed:text-base-content"
+                      >
+                        <.icon name="hero-command-line-micro" class="size-3.5" />
+                      </button>
+                    </div>
+                    <.confirm_modal
+                      :if={not Run.terminal?(run) and run.status != :handing_off}
+                      id={"confirm-abort-#{run.id}"}
+                      title={"Abort #{run.id}?"}
+                      confirm="Abort"
+                      on_confirm={JS.push("abort", value: %{id: run.id})}
+                    >
+                      The agent stops and the run is marked as failed.
+                    </.confirm_modal>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p
+              :if={@shown_count == 0}
+              id="runs-empty"
+              class="px-3 py-6 text-center text-[13px] text-fg-secondary"
             >
-              <.icon name="hero-x-mark-micro" class="size-3.5" />
-            </button>
+              {if @total_count == 0, do: "No runs yet.", else: "No runs match this filter."}
+            </p>
           </div>
-          <div
-            id="log"
-            phx-update="stream"
-            class="max-h-72 overflow-y-auto px-3 py-1.5 font-mono text-[11.5px] leading-normal"
+
+          <section
+            :if={@selected}
+            id="live-log"
+            aria-label="Live log"
+            class="flex min-w-0 flex-[1_1_360px] flex-col border-t border-base-300 bg-base-100 lg:border-l lg:border-t-0"
           >
-            <div id="log-empty" class="hidden text-fg-tertiary only:block">
-              Waiting for activity…
+            <div class="flex h-8 items-center gap-1.5 border-b border-base-300 pl-3 pr-2">
+              <span class="size-1.5 rounded-full bg-dot-blue"></span>
+              <h2 class="text-xs font-semibold">Live log</h2>
+              <.link
+                navigate={~p"/runs/#{@selected}"}
+                class="font-mono text-xs text-link hover:text-link-hover hover:underline"
+              >{@selected}</.link>
+              <button
+                id="log-close"
+                type="button"
+                phx-click="select"
+                phx-value-id=""
+                aria-label="Close live log"
+                class="btn btn-ghost ml-auto size-6 min-h-0 p-0 text-fg-secondary"
+              >
+                <.icon name="hero-x-mark-micro" class="size-3.5" />
+              </button>
             </div>
-            <div :for={{dom_id, line} <- @streams.log} id={dom_id} class="flex gap-2">
-              <span class="w-16 shrink-0 text-fg-tertiary">{line.role}</span>
-              <span class={["min-w-0 break-all", line.class]}>{line.text}</span>
+            <div
+              id="log"
+              phx-update="stream"
+              class="max-h-72 min-h-0 flex-1 overflow-y-auto px-3 py-1.5 font-mono text-[11.5px] leading-normal lg:max-h-none"
+            >
+              <div id="log-empty" class="hidden text-fg-tertiary only:block">
+                Waiting for activity…
+              </div>
+              <div :for={{dom_id, line} <- @streams.log} id={dom_id} class="flex gap-2">
+                <span class="w-16 shrink-0 text-fg-tertiary">{line.role}</span>
+                <span class={["min-w-0 break-all", line.class]}>{line.text}</span>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </div>
 
         <footer
           id="runs-footer"
