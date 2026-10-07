@@ -62,7 +62,7 @@ defmodule ConductorWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
-      phx-hook={@kind == :info && "#{__MODULE__}.AutoDismiss"}
+      phx-hook={@kind == :info && "#{inspect(__MODULE__)}.AutoDismiss"}
       role="alert"
       class="toast toast-bottom toast-end z-50 p-3 [&[hidden]]:hidden"
       {@rest}
@@ -389,7 +389,7 @@ defmodule ConductorWeb.CoreComponents do
         <tr>
           <th
             :for={col <- @col}
-            class="h-8 px-4 text-[11px] font-medium tracking-wide text-fg-tertiary uppercase"
+            class="h-8 px-4 text-[11px] font-medium tracking-wide text-fg-secondary uppercase"
           >
             {col[:label]}
           </th>

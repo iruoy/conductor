@@ -22,6 +22,7 @@ defmodule ConductorWeb.ConfigLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_page={:config} waiting_count={@waiting_count}>
+      <h1 id="config-heading" class="sr-only">Configuration</h1>
       <div class="flex max-w-[1080px] flex-col gap-3 p-3">
         <section id="settings" class="rounded-lg border border-base-300 bg-base-100">
           <header class="flex h-11 items-center gap-3 border-b border-base-300 px-4">
@@ -139,7 +140,7 @@ defmodule ConductorWeb.ConfigLive do
                 <button
                   id={"delete-repo-#{repo.id}"}
                   phx-click={show_modal("confirm-delete-repo-#{repo.id}")}
-                  class="link link-hover text-error"
+                  class="link link-hover text-chip-error-fg"
                 >
                   Delete
                 </button>

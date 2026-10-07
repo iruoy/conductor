@@ -76,6 +76,7 @@ defmodule ConductorWeb.DashboardLive do
           <span class="sr-only sm:not-sr-only">Check GitHub</span>
         </button>
       </:actions>
+      <h1 id="runs-heading" class="sr-only">Runs</h1>
       <%!-- Fills the window below the header (2.5rem and its border), so the footer sits at the bottom. --%>
       <div class="flex min-h-[calc(100dvh-2.5rem-1px)] flex-col">
         <div
