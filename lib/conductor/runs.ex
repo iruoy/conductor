@@ -15,6 +15,7 @@ defmodule Conductor.Runs do
 
   resources do
     resource Run
+    resource Run.Version
     resource Question
     resource Event
   end
@@ -128,6 +129,19 @@ defmodule Conductor.Runs do
     |> Ash.Query.filter(issue_key == ^issue_key and id != ^id)
     |> Ash.Query.sort(:attempt)
     |> Ash.read!()
+  end
+
+  @doc """
+  The statuses a run has had, the first first, as `%{id: id, status: status, at: at}`. A run from before the
+  history was kept has none.
+  """
+  def status_history(run_id) do
+    Run.Version
+    |> Ash.Query.filter(version_source_id == ^run_id)
+    |> Ash.Query.sort([:version_inserted_at, :id])
+    |> Ash.Query.select([:id, :status, :version_inserted_at])
+    |> Ash.read!()
+    |> Enum.map(&%{id: &1.id, status: &1.status, at: &1.version_inserted_at})
   end
 
   def next_queued do

@@ -1,6 +1,7 @@
 defmodule Conductor.RunsTest do
   use Conductor.DataCase, async: false
   import Conductor.Fixtures
+  require Ash.Query
   alias Conductor.Runs
 
   test "messages, tool starts and notes are ordered by conversation, position and id" do
@@ -121,6 +122,7 @@ defmodule Conductor.RunsTest do
 
     assert Ash.Domain.Info.resources(Runs) == [
              Conductor.Runs.Run,
+             Conductor.Runs.Run.Version,
              Conductor.Runs.Question,
              Conductor.Runs.Event
            ]
@@ -314,6 +316,104 @@ defmodule Conductor.RunsTest do
     assert :ok = Runs.ingest(%{event | "run_id" => "missing"})
     assert Runs.get_run!(run.id).error == failed.error
     refute_received {:run_updated, _}
+  end
+
+  describe "status_history/1" do
+    test "keeps every status of a run through its lifecycle, in order and with its time" do
+      project = project_fixture()
+      {:ok, run} = Runs.create_run(project, "SHOP-30", snapshot("SHOP-30"))
+      assert [%{status: :picked_up, at: %DateTime{}}] = Runs.status_history(run.id)
+
+      {:ok, run} = Runs.pump(run)
+      {:ok, run} = Runs.provision_end(run)
+      state = %{"type" => "run_state", "run_id" => run.id, "status" => "waiting_for_input"}
+      assert :ok = Runs.ingest(state)
+      assert :ok = Runs.ingest(%{state | "status" => "running"})
+      {:ok, run} = Runs.settle(Runs.get_run!(run.id), %{outcome: "completed", summary: "Done"})
+      {:ok, run} = Runs.complete(run, %{pr_url: "https://github.com/acme/shop/pull/7"})
+
+      history = Runs.status_history(run.id)
+
+      assert Enum.map(history, & &1.status) ==
+               ~w(picked_up provisioning running waiting_for_input running handing_off completed)a
+
+      times = Enum.map(history, & &1.at)
+      assert times == Enum.sort(times, DateTime)
+      assert history |> Enum.map(& &1.id) |> Enum.uniq() |> length() == 7
+    end
+
+    test "every way to fail is kept" do
+      project = project_fixture()
+
+      for {key, from, action} <- [
+            {"SHOP-31", :picked_up, :abort},
+            {"SHOP-32", :running, :fail},
+            {"SHOP-33", :handing_off, :hand_off_failed}
+          ] do
+        run = run_fixture(project, key, %{status: from})
+        {:ok, _failed} = apply(Runs, action, [run])
+        assert %{status: :failed} = List.last(Runs.status_history(run.id))
+      end
+    end
+
+    test "only a change of status adds to it" do
+      project = project_fixture()
+      run = run_fixture(project, "SHOP-34", %{status: :running, workspace_path: "/tmp/ws"})
+      other = run_fixture(project, "SHOP-35")
+      {:ok, run} = Runs.set_branch(run, %{branch: "conductor/shop-34"})
+      {:ok, run} = Runs.clear_workspace(run)
+
+      # Neither a transition that is refused, nor a state the run is already in.
+      assert {:error, %Ash.Error.Invalid{}} = Runs.complete(run)
+
+      assert :ok =
+               Runs.ingest(%{"type" => "run_state", "run_id" => run.id, "status" => "running"})
+
+      assert Enum.map(Runs.status_history(run.id), & &1.status) ==
+               ~w(picked_up provisioning running)a
+
+      assert Enum.map(Runs.status_history(other.id), & &1.status) == [:picked_up]
+      assert Runs.status_history("missing") == []
+    end
+
+    test "a version holds the status and the action, and no copy of the run" do
+      run = run_fixture(project_fixture(), "SHOP-36", %{status: :running})
+
+      {:ok, _settled} =
+        Runs.settle(run, %{outcome: "failed", summary: "No", error: "Tests failed"})
+
+      versions =
+        Conductor.Runs.Run.Version
+        |> Ash.Query.filter(version_source_id == ^run.id)
+        |> Ash.Query.sort([:version_inserted_at, :id])
+        |> Ash.read!()
+
+      assert Enum.map(versions, &{&1.version_action_name, &1.status, &1.changes}) == [
+               {:create, :picked_up, %{}},
+               {:pump, :provisioning, %{}},
+               {:provision_end, :running, %{}},
+               {:settle, :handing_off, %{}}
+             ]
+    end
+
+    test "a bulk update of the status is kept too" do
+      project = project_fixture()
+      runs = for key <- ~w(SHOP-37 SHOP-38), do: run_fixture(project, key, %{status: :running})
+      ids = Enum.map(runs, & &1.id)
+
+      result =
+        Conductor.Runs.Run
+        |> Ash.Query.filter(id in ^ids)
+        |> Ash.bulk_update(:fail, %{error: "stopped"}, strategy: [:atomic, :atomic_batches])
+
+      assert result.status == :success
+
+      for id <- ids do
+        assert Runs.get_run!(id).status == :failed
+        assert %{status: :failed} = List.last(Runs.status_history(id))
+        assert length(Runs.status_history(id)) == 4
+      end
+    end
   end
 
   describe "filter_runs/3" do
