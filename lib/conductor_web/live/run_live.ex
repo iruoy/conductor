@@ -678,6 +678,7 @@ defmodule ConductorWeb.RunLive do
     socket
     |> assign(selected: conversation, live_text: "", live_thinking: "", live_tools: %{})
     |> assign(busy: busy, groups: groups, tail: tail, turn: turn)
+    |> assign(first_prompt: Enum.find_value(items, &(&1.kind == "pi.user" && &1.id)))
     |> stream(:items, parts, reset: true)
   end
 
@@ -690,11 +691,16 @@ defmodule ConductorWeb.RunLive do
     end
   end
 
-  # What the agent is told starts a turn.
+  # What the agent is told starts a turn. The first thing the conversation on show is told is the issue, as
+  # `transcript/1` marks it in a transcript that is loaded; `first_prompt` is its id, also when it comes again
+  # (a conversation that opens on its first event has loaded it already).
   defp add_part(socket, %{kind: "pi.user"} = part) do
+    first = socket.assigns.first_prompt || part.id
+    part = if part.id == first, do: Map.put(part, :first, true), else: part
+
     socket
     |> close_tail()
-    |> assign(turn: %{started: sent_at(part), parts: []})
+    |> assign(first_prompt: first, turn: %{started: sent_at(part), parts: []})
     |> stream_insert(:items, part)
   end
 

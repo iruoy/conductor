@@ -139,6 +139,53 @@ defmodule ConductorWeb.RunLiveTest do
     assert has_element?(view, "#items-ev-4-e-4-0 [data-from=agent]", "It is there.")
   end
 
+  test "shows the first prompt that arrives while the page is open as the issue", %{
+    conn: conn,
+    project: project
+  } do
+    run = run_fixture(project, "shop-15", %{status: :running})
+    {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+    prompt = fn conversation, id, text ->
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => if(conversation == 4, do: "head", else: "sub:#16"),
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{
+            "id" => id,
+            "kind" => "pi.user",
+            "model" => [%{"role" => "user", "content" => text}]
+          }
+        }
+      })
+    end
+
+    prompt.(4, 1, "The issue")
+    prompt.(4, 2, "Use tabs")
+
+    eventually(fn -> assert has_element?(view, "#items-ev-4-e-2") end)
+    assert has_element?(view, "#items-ev-4-e-1 [data-badge]", "IS")
+    assert has_element?(view, "#items-ev-4-e-1 [data-label]", "Issue")
+    assert has_element?(view, "#items-ev-4-e-2 [data-badge]", "YOU")
+    assert has_element?(view, "#items-ev-4-e-2 [data-label]", "You")
+
+    # Another conversation starts with a first prompt of its own, also when it is opened before it has one.
+    prompt.(5, 1, "The subtask")
+    eventually(fn -> assert has_element?(view, "#tab-5") end)
+    view |> element("#tab-5") |> render_click()
+    assert has_element?(view, "#items-ev-5-e-1 [data-label]", "Issue")
+    prompt.(5, 2, "Go on")
+    eventually(fn -> assert has_element?(view, "#items-ev-5-e-2 [data-label]", "You") end)
+
+    # A page that loads the transcript marks the same one.
+    view |> element("#tab-4") |> render_click()
+    assert has_element?(view, "#items-ev-4-e-1 [data-label]", "Issue")
+    assert has_element?(view, "#items-ev-4-e-2 [data-label]", "You")
+  end
+
   test "streams live text and tool output", %{conn: conn, project: project} do
     run = run_fixture(project, "shop-3", %{status: :running})
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
