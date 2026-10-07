@@ -41,4 +41,28 @@ defmodule ConductorWeb.DashboardLiveTest do
     assert render(view) =~ "Queued shop-1-2"
     eventually(fn -> assert render(view) =~ "shop-1-2" end)
   end
+
+  test "shows when GitHub was last checked and updates after a poll", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/")
+    assert has_element?(view, "#github-checked", "GitHub not checked yet")
+    assert has_element?(view, "#header-actions #poll-now", "Check GitHub")
+
+    Conductor.Poller.poll()
+    _ = :sys.get_state(Conductor.Poller)
+
+    assert has_element?(view, "#github-checked", "GitHub checked")
+    assert has_element?(view, "#github-checked-dot.bg-dot-green")
+    refute has_element?(view, "#github-checked", "every")
+
+    Req.Test.stub(Conductor.GitHub, fn conn ->
+      Req.Test.json(conn, %{"errors" => [%{"message" => "Bad credentials"}]})
+    end)
+
+    view |> element("#poll-now") |> render_click()
+    _ = :sys.get_state(Conductor.Poller)
+    _ = :sys.get_state(Conductor.Poller)
+
+    assert has_element?(view, "#github-checked-dot.bg-dot-red")
+    assert has_element?(view, ~s|#github-checked[title*="Bad credentials"]|)
+  end
 end

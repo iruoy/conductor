@@ -8,11 +8,26 @@ defmodule Conductor.Poller do
   alias Conductor.{Config, Coordinator, GitHub, Runs, Workspace}
 
   @day 24 * 60 * 60 * 1000
+  @pubsub Conductor.PubSub
+  @topic "poller"
 
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   @doc "Polls now instead of at the next tick."
   def poll_now, do: GenServer.cast(__MODULE__, :poll_now)
+
+  @doc "Subscribes the caller to `{:polled, last_poll}` messages, sent after every poll."
+  def subscribe, do: Phoenix.PubSub.subscribe(@pubsub, @topic)
+
+  @doc """
+  The configured `interval` (ms, `nil` when the timers are off) and the last poll: `nil` before the first one, else
+  `%{at: DateTime, ok?: boolean, reason: String.t() | nil}`.
+  """
+  def status do
+    if Process.whereis(__MODULE__),
+      do: GenServer.call(__MODULE__, :status),
+      else: %{interval: nil, last_poll: nil}
+  end
 
   @impl true
   def init(opts) do
@@ -24,13 +39,22 @@ defmodule Conductor.Poller do
       Process.send_after(self(), :prune, 60_000)
     end
 
-    {:ok, %{interval: interval}}
+    {:ok, %{interval: interval, last_poll: nil}}
   end
+
+  @impl true
+  def handle_call(:status, _from, state),
+    do: {:reply, Map.take(state, [:interval, :last_poll]), state}
 
   @impl true
   def handle_cast(:poll_now, state) do
     poll()
     {:noreply, state}
+  end
+
+  def handle_cast({:polled, last_poll}, state) do
+    Phoenix.PubSub.broadcast(@pubsub, @topic, {:polled, last_poll})
+    {:noreply, %{state | last_poll: last_poll}}
   end
 
   @impl true
@@ -46,18 +70,35 @@ defmodule Conductor.Poller do
     {:noreply, state}
   end
 
-  @doc "Picks up every issue that is ready in a project and has no open run, highest priority first."
+  @doc """
+  Picks up every issue that is ready in a project and has no open run, highest priority first. The result (time and
+  whether every project could be polled) is recorded for `status/0` and broadcast to `subscribe/0`.
+  """
   def poll do
-    for project <- Config.list_enabled_projects() do
-      try do
-        poll_project(project)
-      rescue
-        error -> Logger.error("poller: #{project.repo.name}: #{Exception.message(error)}")
-      end
-    end
+    reasons =
+      for project <- Config.list_enabled_projects(), reason = poll_safely(project), do: reason
 
+    last_poll =
+      %{at: DateTime.utc_now(:second), ok?: reasons == [], reason: Enum.join(reasons, "; ")}
+      |> Map.update!(:reason, &if(&1 == "", do: nil, else: &1))
+
+    if Process.whereis(__MODULE__), do: GenServer.cast(__MODULE__, {:polled, last_poll})
     :ok
   end
+
+  defp poll_safely(project) do
+    case poll_project(project) do
+      :ok -> nil
+      {:error, reason} -> "#{project.repo.name}: #{reason_text(reason)}"
+    end
+  rescue
+    error ->
+      Logger.error("poller: #{project.repo.name}: #{Exception.message(error)}")
+      "#{project.repo.name}: #{Exception.message(error)}"
+  end
+
+  defp reason_text(reason) when is_binary(reason), do: reason
+  defp reason_text(reason), do: inspect(reason)
 
   defp poll_project(project) do
     case GitHub.pickup(project) do
@@ -74,8 +115,11 @@ defmodule Conductor.Poller do
           end
         end
 
+        :ok
+
       {:error, reason} ->
         Logger.error("poller: #{project.repo.name} pickup failed: #{reason}")
+        {:error, reason}
     end
   end
 

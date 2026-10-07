@@ -7,9 +7,13 @@ defmodule ConductorWeb.DashboardLive do
   @impl true
   def mount(_params, _session, socket) do
     # The "runs" topic is subscribed by the ConductorWeb.WaitingCount hook of the live session.
+    if connected?(socket), do: Poller.subscribe()
+    %{interval: interval, last_poll: last_poll} = Poller.status()
+
     {:ok,
      socket
      |> assign(page_title: "Runs", selected: nil, log_seq: 0)
+     |> assign(interval: interval, last_poll: last_poll)
      |> stream(:runs, Runs.list_runs())
      |> stream(:log, [])}
   end
@@ -18,17 +22,36 @@ defmodule ConductorWeb.DashboardLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_page={:runs} waiting_count={@waiting_count}>
+      <:actions>
+        <div
+          id="github-checked"
+          title={@last_poll && @last_poll.reason}
+          class="hidden items-center gap-1.5 text-xs text-fg-secondary sm:flex"
+        >
+          <span
+            id="github-checked-dot"
+            class={[
+              "size-1.5 rounded-full",
+              cond do
+                is_nil(@last_poll) -> "bg-dot-grey"
+                @last_poll.ok? -> "bg-dot-green"
+                true -> "bg-dot-red"
+              end
+            ]}
+          ></span>
+          {checked_text(@last_poll, @interval)}
+        </div>
+        <button
+          id="poll-now"
+          type="button"
+          phx-click="poll_now"
+          title="Look for new issues to pick up without waiting for the next check"
+          class="btn btn-sm h-7 min-h-0 gap-1.5 border-line-strong bg-base-100 px-2.5 text-xs font-medium"
+        >
+          <.icon name="hero-arrow-path" class="size-3.5" /> Check GitHub
+        </button>
+      </:actions>
       <div class="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
-        <.header>
-          Runs
-          <:subtitle>Issues picked up from GitHub, newest first.</:subtitle>
-          <:actions>
-            <.button id="poll-now" phx-click="poll_now">
-              <.icon name="hero-arrow-path" class="size-4" /> Poll now
-            </.button>
-          </:actions>
-        </.header>
-
         <div class="overflow-x-auto rounded-box border border-base-300">
           <table class="table">
             <thead>
@@ -146,7 +169,7 @@ defmodule ConductorWeb.DashboardLive do
   @impl true
   def handle_event("poll_now", _params, socket) do
     if Process.whereis(Poller), do: Poller.poll_now()
-    {:noreply, put_flash(socket, :info, "Polling GitHub…")}
+    {:noreply, put_flash(socket, :info, "Checking GitHub for new issues…")}
   end
 
   def handle_event("select", %{"id" => id}, socket) do
@@ -191,6 +214,10 @@ defmodule ConductorWeb.DashboardLive do
         else: socket
 
     {:noreply, socket}
+  end
+
+  def handle_info({:polled, last_poll}, socket) do
+    {:noreply, assign(socket, :last_poll, last_poll)}
   end
 
   def handle_info({:agent_event, %{role: role, event: event}}, socket) do
@@ -238,4 +265,33 @@ defmodule ConductorWeb.DashboardLive do
 
   defp format_time(nil), do: ""
   defp format_time(datetime), do: Calendar.strftime(datetime, "%d %b %H:%M")
+
+  defp checked_text(nil, _interval), do: "GitHub not checked yet"
+
+  defp checked_text(%{at: at}, interval) do
+    time = at |> DateTime.to_naive() |> NaiveDateTime.to_erl() |> local_time()
+    ["GitHub checked ", time, interval_text(interval)]
+  end
+
+  # The poller stores UTC; show it in the server's timezone.
+  defp local_time(utc_erl) do
+    utc_erl
+    |> :calendar.universal_time_to_local_time()
+    |> NaiveDateTime.from_erl!()
+    |> Calendar.strftime("%H:%M")
+  end
+
+  defp interval_text(nil), do: ""
+  defp interval_text(60_000), do: " · every minute"
+
+  defp interval_text(ms) when rem(ms, 3_600_000) == 0,
+    do: " · every #{unit(div(ms, 3_600_000), "hour")}"
+
+  defp interval_text(ms) when rem(ms, 60_000) == 0,
+    do: " · every #{unit(div(ms, 60_000), "minute")}"
+
+  defp interval_text(ms), do: " · every #{unit(max(div(ms, 1000), 1), "second")}"
+
+  defp unit(1, name), do: name
+  defp unit(n, name), do: "#{n} #{name}s"
 end
