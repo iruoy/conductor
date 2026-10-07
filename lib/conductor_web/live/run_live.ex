@@ -16,6 +16,7 @@ defmodule ConductorWeb.RunLive do
      |> assign(page_title: run.id, run: run, conversations: conversations)
      |> assign(attempts: Runs.other_attempts(run), history: Runs.status_history(id))
      |> assign(inbox: [], sent: %{}, models: Runs.conversation_models(id))
+     |> assign(ends: Runs.conversation_ends(id))
      |> assign_questions()
      |> select(default_conversation(conversations))}
   end
@@ -42,14 +43,22 @@ defmodule ConductorWeb.RunLive do
           id="conversations"
         >
           <button
-            :for={{conversation, label} <- tab_labels(@conversations)}
+            :for={{conversation, label, state} <- tabs(@run, @conversations, @ends)}
             role="tab"
             id={"tab-#{conversation}"}
-            title={tab_title(@conversations, conversation, @models)}
+            data-state={state}
+            aria-selected={to_string(@selected == conversation)}
+            title={tab_title(state, @conversations, conversation, @models)}
             phx-click="select"
             phx-value-conversation={conversation}
-            class={["tab font-mono text-xs", @selected == conversation && "tab-active"]}
+            class={[
+              "tab h-[30px] gap-1.5 px-2.5 text-xs text-fg-secondary",
+              "before:!left-0 before:!h-0.5 before:!w-full before:!rounded-none",
+              @selected == conversation &&
+                "tab-active !text-base-content [--tab-border-color:var(--link)]"
+            ]}
           >
+            <.pulse_dot pulse={state == "working"} class={["size-1.5", state_dot(state)]} />
             {label}
           </button>
         </div>
@@ -527,7 +536,7 @@ defmodule ConductorWeb.RunLive do
   def handle_info({:agent_event, %{conversation: conversation, role: role, event: event}}, socket) do
     # Messages go to the head agent, whichever conversation is on show.
     socket = if role == "head", do: track_inbox(socket, event), else: socket
-    socket = track_model(socket, conversation, event)
+    socket = socket |> track_model(conversation, event) |> track_end(conversation, event)
 
     socket =
       if List.keymember?(socket.assigns.conversations, conversation, 0) do
@@ -577,6 +586,32 @@ defmodule ConductorWeb.RunLive do
     do: assign(socket, models: Runs.conversation_models(socket.assigns.run.id))
 
   defp track_model(socket, _conversation, _event), do: socket
+
+  # How a conversation last left off, from the events that say so; a snapshot may bring entries this page missed.
+  defp track_end(socket, conversation, %{
+         "type" => "message_end",
+         "entry" => %{"kind" => kind} = entry
+       }) do
+    message = List.first(List.wrap(entry["model"])) || %{}
+    put_end(socket, conversation, kind, message["stopReason"])
+  end
+
+  defp track_end(socket, conversation, %{"type" => type})
+       when type in ~w(message_start tool_execution_start),
+       do: put_end(socket, conversation, "tool_start", nil)
+
+  defp track_end(socket, _conversation, %{"type" => "snapshot"}),
+    do: assign(socket, ends: Runs.conversation_ends(socket.assigns.run.id))
+
+  defp track_end(socket, _conversation, _event), do: socket
+
+  defp put_end(socket, _conversation, "pi.system", _stop), do: socket
+
+  defp put_end(socket, conversation, kind, stop),
+    do:
+      assign(socket,
+        ends: Map.put(socket.assigns.ends, conversation, Runs.conversation_end(kind, stop))
+      )
 
   # A snapshot follows a runner restart; the database already holds it, so reload from there.
   defp apply_event(socket, conversation, %{"type" => "snapshot"}),
@@ -820,15 +855,56 @@ defmodule ConductorWeb.RunLive do
     labels
   end
 
-  # What a tab says when it is pointed at: the model of a subagent's conversation, once it is known. The head's
-  # model is in the details. Anything more a tab should say (such as its state) is another part of this list.
-  defp tab_title(conversations, conversation, models) do
+  defp tabs(run, conversations, ends) do
+    for {conversation, label} <- tab_labels(conversations),
+        do: {conversation, label, tab_state(run, conversations, ends, conversation)}
+  end
+
+  # The state of a conversation, as the tab's dot and title say it. The head follows the run. A subagent follows its
+  # last entry (what `Runs.conversation_ends/1` reads), but one that ended in an error has failed, and one that is
+  # over (an earlier attempt, or the run is) is done whatever it ended with.
+  defp tab_state(run, conversations, ends, conversation) do
+    ended = ends[conversation]
+
+    cond do
+      head?(conversations, conversation) ->
+        case run.status do
+          :failed -> "failed"
+          :completed -> "done"
+          :waiting_for_input -> "waiting"
+          _status -> "working"
+        end
+
+      ended == :error ->
+        "failed"
+
+      not latest_attempt?(conversations, conversation) or Run.terminal?(run) ->
+        "done"
+
+      ended in [nil, :working] ->
+        "working"
+
+      true ->
+        "done"
+    end
+  end
+
+  defp state_dot("working"), do: "bg-dot-blue"
+  defp state_dot("waiting"), do: "bg-dot-orange"
+  defp state_dot("done"), do: "bg-dot-green"
+  defp state_dot("failed"), do: "bg-dot-red"
+
+  defp state_text("waiting"), do: "waiting for input"
+  defp state_text(state), do: state
+
+  # What a tab says when it is pointed at: its state, so the dot is not the only way to tell, and for a subagent the
+  # model of its conversation once that is known. The head's model is in the details.
+  defp tab_title(state, conversations, conversation, models) do
     model = if head?(conversations, conversation), do: nil, else: models[conversation]
 
-    case Enum.reject([model && model_text(model)], &is_nil/1) do
-      [] -> nil
-      parts -> Enum.join(parts, " · ")
-    end
+    [state_text(state), model && model_text(model)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" · ")
   end
 
   # The model the conversation on show ran on: what the run was started with for the head agent (what its answers

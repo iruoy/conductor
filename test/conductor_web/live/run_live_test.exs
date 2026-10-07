@@ -550,8 +550,8 @@ defmodule ConductorWeb.RunLiveTest do
       answer(run, 2, "sub:#24", 1, "faux-small")
 
       {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-      assert has_element?(view, "#tab-2[title='faux/faux-small']")
-      refute has_element?(view, "#tab-1[title]")
+      assert has_element?(view, "#tab-2[title='done · faux/faux-small']")
+      assert has_element?(view, "#tab-1[title='working']")
       assert has_element?(view, "#run-model-id", "faux/faux-1")
 
       view |> element("#tab-2") |> render_click()
@@ -568,17 +568,129 @@ defmodule ConductorWeb.RunLiveTest do
       })
 
       eventually(fn -> assert has_element?(view, "#tab-3") end)
-      refute has_element?(view, "#tab-3[title]")
+      assert has_element?(view, "#tab-3[title=working]")
       view |> element("#tab-3") |> render_click()
       assert has_element?(view, "#run-model", "Not known yet")
 
       answer(run, 3, "sub:#25", 1, "faux-large")
-      eventually(fn -> assert has_element?(view, "#tab-3[title='faux/faux-large']") end)
+      eventually(fn -> assert has_element?(view, "#tab-3[title='done · faux/faux-large']") end)
       assert has_element?(view, "#run-model-id", "faux/faux-large")
 
       view |> element("#tab-1") |> render_click()
       assert has_element?(view, "#run-model-label", "Head model")
       assert has_element?(view, "#run-model-id", "faux/faux-1")
+    end
+  end
+
+  describe "conversation tabs" do
+    defp entry(run, conversation, role, id, kind, stop \\ nil) do
+      message = %{"role" => "assistant", "stopReason" => stop, "content" => []}
+
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => role,
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{"id" => id, "kind" => kind, "model" => [message]}
+        }
+      })
+    end
+
+    test "a running run has a working head and subagents by their last entry", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-40", %{status: :running})
+      entry(run, 1, "head", 1, "pi.user")
+      entry(run, 2, "sub:#12", 1, "pi.assistant", "stop")
+      entry(run, 3, "sub:#13", 1, "pi.assistant", "toolUse")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-1[data-state=working][title=working] [data-pulse]")
+      assert has_element?(view, "#tab-2[data-state=done][title=done] :not([data-pulse])")
+      assert has_element?(view, "#tab-3[data-state=working] [data-pulse]")
+    end
+
+    test "a waiting run has a waiting head", %{conn: conn, project: project} do
+      run = run_fixture(project, "shop-41", %{status: :waiting_for_input})
+      entry(run, 1, "head", 1, "pi.assistant", "toolUse")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-1[data-state=waiting][title='waiting for input']")
+      assert has_element?(view, "#tab-1 :not([data-pulse])")
+    end
+
+    test "a completed run is done in every tab, however its conversations ended", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-42", %{status: :completed})
+      entry(run, 1, "head", 1, "pi.assistant", "stop")
+      entry(run, 2, "sub:#12", 1, "pi.tool-result")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-1[data-state=done]")
+      assert has_element?(view, "#tab-2[data-state=done]")
+    end
+
+    test "a failed run has a failed head; a subagent fails only when it ended in an error", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-43", %{status: :failed})
+      entry(run, 1, "head", 1, "pi.assistant", "stop")
+      entry(run, 2, "sub:#12", 1, "pi.assistant", "error")
+      entry(run, 3, "sub:#13", 1, "pi.assistant", "stop")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-1[data-state=failed][title=failed]")
+      assert has_element?(view, "#tab-2[data-state=failed]")
+      assert has_element?(view, "#tab-3[data-state=done]")
+    end
+
+    test "an earlier attempt is over; a subagent that ended in an error is failed", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-44", %{status: :running})
+      entry(run, 1, "head", 1, "pi.user")
+      entry(run, 2, "sub:#12", 1, "pi.tool-result")
+      entry(run, 3, "sub:#12", 1, "pi.assistant", "error")
+      entry(run, 4, "sub:#12", 1, "pi.tool-result")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-2[data-state=done]")
+      assert has_element?(view, "#tab-3[data-state=failed]")
+      assert has_element?(view, "#tab-4[data-state=working]")
+    end
+
+    test "the dots change with the events and the run's status", %{conn: conn, project: project} do
+      run = run_fixture(project, "shop-45", %{status: :running})
+      entry(run, 1, "head", 1, "pi.user")
+      entry(run, 2, "sub:#12", 1, "pi.user")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-2[data-state=working]")
+
+      entry(run, 2, "sub:#12", 2, "pi.assistant", "stop")
+      eventually(fn -> assert has_element?(view, "#tab-2[data-state=done]") end)
+
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => 2,
+        "role" => "sub:#12",
+        "event" => %{"type" => "message_start", "message" => %{"role" => "assistant"}}
+      })
+
+      eventually(fn -> assert has_element?(view, "#tab-2[data-state=working]") end)
+      entry(run, 2, "sub:#12", 3, "pi.assistant", "error")
+      eventually(fn -> assert has_element?(view, "#tab-2[data-state=failed]") end)
+
+      {:ok, _run} = Runs.wait_for_input(run)
+      eventually(fn -> assert has_element?(view, "#tab-1[data-state=waiting]") end)
     end
   end
 

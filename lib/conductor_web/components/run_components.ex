@@ -496,7 +496,7 @@ defmodule ConductorWeb.RunComponents do
   attr :pulse, :boolean, default: true
 
   # A dot that pulses for what is going on now; it stays still for a reader who asked for less motion.
-  defp pulse_dot(assigns) do
+  def pulse_dot(assigns) do
     ~H"""
     <span
       data-pulse={@pulse}

@@ -277,6 +277,35 @@ defmodule Conductor.Runs do
   end
 
   @doc """
+  How each conversation of the run last left off, as `%{conversation => :working | :ended | :error}`, read from its
+  last entry without loading the transcript. See `conversation_end/2`.
+  """
+  def conversation_ends(run_id) do
+    Repo.all(
+      from e in Event,
+        where: e.run_id == ^run_id and e.kind != "pi.system",
+        distinct: e.conversation,
+        order_by: [e.conversation, desc: e.id],
+        select: {e.conversation, e.kind, fragment("? #>> '{model,0,stopReason}'", e.payload)}
+    )
+    |> Map.new(fn {conversation, kind, stop} -> {conversation, conversation_end(kind, stop)} end)
+  end
+
+  @doc """
+  What an entry of a conversation says about it: `:error` when the agent's answer stopped on an error, `:working`
+  when the agent has something to do next (it was told something, got a tool result, started a call, or stopped to
+  call a tool), and `:ended` otherwise.
+  """
+  def conversation_end("pi.assistant", "error"), do: :error
+  def conversation_end("pi.assistant", "toolUse"), do: :working
+  def conversation_end("pi.assistant", _stop), do: :ended
+
+  def conversation_end(kind, _stop) when kind in ~w(pi.user pi.tool-result tool_start),
+    do: :working
+
+  def conversation_end(_kind, _stop), do: :ended
+
+  @doc """
   The model an assistant message names, in the shape of a model choice (`"provider"`, `"modelId"`, and
   `"reasoning"` when a level was asked for); `nil` when it names none.
   """
