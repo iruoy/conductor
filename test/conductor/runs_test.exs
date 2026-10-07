@@ -377,7 +377,9 @@ defmodule Conductor.RunsTest do
     end
 
     test "a version holds the status and the action, and no copy of the run" do
-      run = run_fixture(project_fixture(), "SHOP-36", %{status: :running})
+      models = %{"head" => %{"provider" => "faux", "modelId" => "faux-1"}}
+      run = run_fixture(project_fixture(), "SHOP-36", %{status: :running, models: models})
+      assert Runs.get_run!(run.id).models == models
 
       {:ok, _settled} =
         Runs.settle(run, %{outcome: "failed", summary: "No", error: "Tests failed"})
@@ -414,6 +416,39 @@ defmodule Conductor.RunsTest do
         assert length(Runs.status_history(id)) == 4
       end
     end
+  end
+
+  test "conversation_models/1 reads each conversation's model from its first answer" do
+    run = run_fixture(project_fixture(), "SHOP-60")
+    other = run_fixture(project_fixture(), "SHOP-61")
+
+    answer = fn run, conversation, role, id, message ->
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => role,
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{"id" => id, "kind" => "pi.assistant", "model" => [message]}
+        }
+      })
+    end
+
+    faux = %{"role" => "assistant", "provider" => "faux", "model" => "faux-1"}
+    answer.(run, 1, "head", 2, Map.put(faux, "thinkingLevel", "high"))
+    answer.(run, 1, "head", 5, %{faux | "model" => "faux-later"})
+    answer.(run, 2, "sub:#7", 3, %{faux | "model" => "faux-small"})
+    # An answer that names no model, as nothing the runner sends does.
+    answer.(run, 3, "sub:#8", 4, %{"role" => "assistant"})
+    answer.(other, 1, "head", 2, %{faux | "model" => "faux-other"})
+
+    assert Runs.conversation_models(run.id) == %{
+             1 => %{"provider" => "faux", "modelId" => "faux-1", "reasoning" => "high"},
+             2 => %{"provider" => "faux", "modelId" => "faux-small"}
+           }
+
+    assert Runs.conversation_models("missing") == %{}
   end
 
   describe "filter_runs/3" do

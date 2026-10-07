@@ -88,6 +88,7 @@ defmodule Conductor.Runs.Run do
       :summary,
       :error,
       :pr_url,
+      :models,
       :project_id,
       :inserted_at,
       :updated_at
@@ -133,7 +134,7 @@ defmodule Conductor.Runs.Run do
     end
 
     update :provision_end do
-      accept []
+      accept [:models]
       change transition_state(:running)
     end
 
@@ -198,6 +199,10 @@ defmodule Conductor.Runs.Run do
     attribute :summary, :string, public?: true, constraints: [trim?: false]
     attribute :error, :string, public?: true, constraints: [trim?: false]
     attribute :pr_url, :string, public?: true, constraints: [trim?: false]
+
+    # The model choices the runner got in `start_run`, by role (`head`, `low`, `medium`, `high`), each
+    # `%{"provider" => _, "modelId" => _, "reasoning" => _}`. A run from before they were kept has none.
+    attribute :models, :map, public?: true
     create_timestamp :inserted_at, type: :utc_datetime
     update_timestamp :updated_at, type: :utc_datetime
   end

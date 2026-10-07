@@ -250,6 +250,48 @@ defmodule Conductor.Runs do
     )
   end
 
+  @doc """
+  The model each conversation of the run ran on, as `%{conversation => %{"provider" => _, "modelId" => _}}` with
+  `"reasoning"` when the agent asked for a level. A conversation that has no answer yet is left out.
+  """
+  def conversation_models(run_id) do
+    # The runner stores the provider and model with every assistant message. This narrow Ecto query reads them
+    # from the first one of each conversation, without loading the transcript.
+    Repo.all(
+      from e in Event,
+        where: e.run_id == ^run_id and e.kind == "pi.assistant",
+        distinct: e.conversation,
+        order_by: [e.conversation, e.position, e.id],
+        select:
+          {e.conversation, fragment("? #>> '{model,0,provider}'", e.payload),
+           fragment("? #>> '{model,0,model}'", e.payload),
+           fragment("? #>> '{model,0,thinkingLevel}'", e.payload)}
+    )
+    |> Enum.flat_map(fn {conversation, provider, model, level} ->
+      case entry_model(%{"provider" => provider, "model" => model, "thinkingLevel" => level}) do
+        nil -> []
+        choice -> [{conversation, choice}]
+      end
+    end)
+    |> Map.new()
+  end
+
+  @doc """
+  The model an assistant message names, in the shape of a model choice (`"provider"`, `"modelId"`, and
+  `"reasoning"` when a level was asked for); `nil` when it names none.
+  """
+  def entry_model(%{"provider" => provider, "model" => model} = message)
+      when is_binary(provider) and is_binary(model) do
+    choice = %{"provider" => provider, "modelId" => model}
+
+    case message["thinkingLevel"] do
+      level when is_binary(level) and level != "" -> Map.put(choice, "reasoning", level)
+      _ -> choice
+    end
+  end
+
+  def entry_model(_message), do: nil
+
   @doc "Adds a note from Conductor itself (such as setup output) to the run's transcript, as conversation 0."
   def record_note(run_id, key, payload) do
     upsert_events([row(run_id, 0, "conductor", "n:" <> key, nil, "conductor.note", payload)])
