@@ -22,7 +22,7 @@ defmodule ConductorWeb.ConfigLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_page={:config} waiting_count={@waiting_count}>
-      <div class="space-y-3 p-3">
+      <div class="flex max-w-[1080px] flex-col gap-3 p-3">
         <section id="settings" class="rounded-lg border border-base-300 bg-base-100">
           <header class="flex h-11 items-center gap-3 border-b border-base-300 px-4">
             <h2 class="text-sm font-semibold">Settings</h2>
@@ -111,7 +111,7 @@ defmodule ConductorWeb.ConfigLive do
               id="new-repo"
               phx-click="edit_repo"
               phx-value-id="new"
-              class="btn btn-sm h-7 min-h-0"
+              class="btn btn-sm h-[26px] min-h-0 border-line-strong bg-base-100 text-xs font-medium"
             >
               New repository
             </button>
@@ -234,7 +234,7 @@ defmodule ConductorWeb.ConfigLive do
               phx-click="edit_project"
               phx-value-id="new"
               disabled={@repos == []}
-              class="btn btn-sm h-7 min-h-0"
+              class="btn btn-sm h-[26px] min-h-0 border-line-strong bg-base-100 text-xs font-medium"
             >
               New project
             </button>
