@@ -82,6 +82,8 @@
   --chip-success-fg: #7FD39A;
   --chip-error-bg: #3B1A17;
   --chip-error-fg: #FF9C90;
+  --chip-error-line: #6B2E28;
+  --fg-faint: #55585E;
   --dot-blue: #2F55D4;
   --dot-orange: #D9822B;
   --dot-green: #1C8A43;
@@ -144,6 +146,8 @@
   --chip-success-fg: #1C6B34;
   --chip-error-bg: #FBE3E1;
   --chip-error-fg: #A3261B;
+  --chip-error-line: #E8B9B3;
+  --fg-faint: #B5B6B9;
   --dot-blue: #2F55D4;
   --dot-orange: #D9822B;
   --dot-green: #1C8A43;
@@ -211,6 +215,8 @@
   --color-chip-success-fg: var(--chip-success-fg);
   --color-chip-error-bg: var(--chip-error-bg);
   --color-chip-error-fg: var(--chip-error-fg);
+  --color-chip-error-line: var(--chip-error-line);
+  --color-fg-faint: var(--fg-faint);
   --color-dot-blue: var(--dot-blue);
   --color-dot-orange: var(--dot-orange);
   --color-dot-green: var(--dot-green);

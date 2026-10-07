@@ -304,4 +304,135 @@ defmodule ConductorWeb.RunLiveTest do
     refute has_element?(view, "#items-ev-4-e-2")
     refute has_element?(view, "#items-ev-4-e-4-0")
   end
+
+  describe "page frame" do
+    test "a running run: breadcrumb, status line, actions and details", %{
+      conn: conn,
+      project: project
+    } do
+      run =
+        run_fixture(project, "shop-5", %{
+          status: :running,
+          branch: "conductor/shop-5",
+          workspace_path: "/tmp/ws/shop-5",
+          issue_snapshot:
+            snapshot("shop-5", "Add a limit", %{"url" => "https://github.com/acme/shop/issues/5"})
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#run #run-header a#run-back[href='/']", "Runs")
+      assert has_element?(view, "h1#run-title #run-id", "shop-5-1")
+      assert has_element?(view, "h1#run-title #run-summary", "Add a limit")
+      assert has_element?(view, "#run-status[data-status=running]")
+      assert has_element?(view, "#run-branch", "conductor/shop-5")
+      assert has_element?(view, "#run-started", "started")
+
+      assert has_element?(
+               view,
+               "a#open-issue[href='https://github.com/acme/shop/issues/5'][target=_blank]"
+             )
+
+      assert has_element?(view, "#abort")
+      assert has_element?(view, "dialog#confirm-abort")
+      refute has_element?(view, "#retry")
+      refute has_element?(view, "#run-error")
+
+      assert has_element?(view, "#run-sidebar dl#run-details #run-project", "acme/1")
+      assert has_element?(view, "#run-repository", project.repo.name)
+      assert has_element?(view, "#run-pr", "Not opened yet")
+      refute has_element?(view, "#run-pr-link")
+      assert has_element?(view, "#run-attempt", "1")
+      refute has_element?(view, "#run-attempts a")
+      assert has_element?(view, "#run-workspace", "/tmp/ws/shop-5")
+
+      # The transcript scrolls in its own frame, with the prompt under it.
+      assert has_element?(view, "#run #transcript-scroller[phx-hook] #transcript")
+      assert has_element?(view, "#run #prompt-bar form#prompt")
+    end
+
+    test "a waiting run: the warning chip, and the question in the bar at the bottom", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-6", %{status: :waiting_for_input})
+      {:ok, _question} = Runs.upsert_question(run.id, "q1", "Which way?")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#run-status[data-status=waiting_for_input]")
+      assert has_element?(view, "#abort")
+      refute has_element?(view, "#retry")
+      # The snapshot has no link to the issue, and the workspace is not there yet.
+      refute has_element?(view, "#open-issue")
+      assert has_element?(view, "#run-workspace", "Not created yet")
+      assert has_element?(view, "#prompt-bar form#answer-q1 #question-q1", "Which way?")
+    end
+
+    test "a failed run: the error banner, Retry, the pull request and the other attempts", %{
+      conn: conn,
+      project: project
+    } do
+      first = run_fixture(project, "shop-7", %{status: :failed, error: "boom"})
+
+      second =
+        run_fixture(project, "shop-7", %{status: :failed, error: "Tests failed.\nexit 2"})
+
+      other_issue = run_fixture(project, "shop-8", %{status: :failed, error: "boom"})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{second.id}")
+
+      assert has_element?(view, "#run-status[data-status=failed]")
+      assert has_element?(view, "#run-error[role=alert]")
+      # Line breaks are kept.
+      assert view |> element("#run-error-text") |> render() =~ "Tests failed.\nexit 2"
+      assert has_element?(view, "#retry")
+      refute has_element?(view, "#abort")
+      refute has_element?(view, "#confirm-abort")
+      refute has_element?(view, "#prompt-bar")
+      assert has_element?(view, "#run-workspace", "Removed")
+
+      assert has_element?(view, "#run-attempt", "2")
+
+      assert has_element?(
+               view,
+               "#run-attempts #attempt-#{first.id} a[href='/runs/#{first.id}']",
+               first.id
+             )
+
+      assert has_element?(view, "#attempt-#{first.id} [data-status=failed]", "failed")
+      refute has_element?(view, "#attempt-#{second.id}")
+      refute has_element?(view, "#attempt-#{other_issue.id}")
+
+      # A retry is another attempt, listed as soon as it is there.
+      {:ok, third} = Runs.create_run(project, "shop-7", snapshot("shop-7"))
+
+      eventually(fn ->
+        assert has_element?(view, "#attempt-#{third.id} [data-status=picked_up]")
+      end)
+    end
+
+    test "a completed run links its pull request from the details and offers no retry", %{
+      conn: conn,
+      project: project
+    } do
+      run =
+        run_fixture(project, "shop-9", %{
+          status: :completed,
+          pr_url: "https://github.com/acme/shop/pull/221"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(
+               view,
+               "#run-pr a#run-pr-link[href='https://github.com/acme/shop/pull/221'][target=_blank]",
+               "#221"
+             )
+
+      refute has_element?(view, "#run-header a[href*='/pull/']")
+      refute has_element?(view, "#retry")
+      refute has_element?(view, "#abort")
+    end
+  end
 end

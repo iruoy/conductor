@@ -122,6 +122,14 @@ defmodule Conductor.Runs do
     Run |> Ash.Query.filter(status == :waiting_for_input) |> Ash.count!()
   end
 
+  @doc "The other runs of the same issue as `run`, the first attempt first."
+  def other_attempts(%Run{id: id, issue_key: issue_key}) do
+    Run
+    |> Ash.Query.filter(issue_key == ^issue_key and id != ^id)
+    |> Ash.Query.sort(:attempt)
+    |> Ash.read!()
+  end
+
   def next_queued do
     Run
     |> Ash.Query.filter(status == :picked_up)

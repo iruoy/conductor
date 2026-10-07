@@ -173,6 +173,19 @@ defmodule Conductor.RunsTest do
     assert queued.project.repo.id == project.repo.id
   end
 
+  test "other_attempts lists the other runs of the same issue, the first attempt first" do
+    project = project_fixture()
+    first = run_fixture(project, "SHOP-1", %{status: :failed})
+    second = run_fixture(project, "SHOP-1", %{status: :failed})
+    third = run_fixture(project, "SHOP-1", %{status: :running})
+    run_fixture(project, "SHOP-2")
+
+    assert Enum.map(Runs.other_attempts(second), &{&1.id, &1.status}) ==
+             [{first.id, :failed}, {third.id, :running}]
+
+    assert Runs.other_attempts(run_fixture(project, "SHOP-3")) == []
+  end
+
   test "queue priority, active slots and pruning preserve selection rules" do
     project = project_fixture()
     missing = run_fixture(project, "SHOP-1")

@@ -14,6 +14,7 @@ defmodule ConductorWeb.RunLive do
     {:ok,
      socket
      |> assign(page_title: run.id, run: run, conversations: conversations)
+     |> assign(attempts: Runs.other_attempts(run))
      |> assign(inbox: [], sent: %{})
      |> assign_questions()
      |> select(default_conversation(conversations))}
@@ -23,47 +24,23 @@ defmodule ConductorWeb.RunLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_page={:runs} waiting_count={@waiting_count}>
-      <%!-- Fills the window below the header (2.5rem and its border), padding included, so the
-      transcript scrolls in its own frame and the run's header, questions and tabs stay in view. --%>
-      <div id="run" class="flex h-[calc(100dvh-2.5rem-1px)] flex-col gap-6 p-4 sm:p-6">
-        <.header>
-          <span class="font-mono">{@run.id}</span>
-          <span class="font-normal">· {(@run.issue_snapshot || %{})["summary"]}</span>
-          <:subtitle>
-            <span class="inline-flex flex-wrap items-center gap-2">
-              <.status_badge status={@run.status} />
-              <span :if={@run.branch} class="font-mono">{@run.branch}</span>
-              <a :if={@run.pr_url} href={@run.pr_url} target="_blank" class="link link-primary">Pull request</a>
-            </span>
-          </:subtitle>
-          <:actions>
-            <button :if={Run.terminal?(@run)} id="retry" phx-click="retry" class="btn btn-sm">Retry</button>
-            <button
-              :if={not Run.terminal?(@run) and @run.status != :handing_off}
-              id="abort"
-              phx-click={show_modal("confirm-abort")}
-              class="btn btn-sm btn-error btn-outline"
-            >
-              Abort
-            </button>
-            <.confirm_modal
-              :if={not Run.terminal?(@run) and @run.status != :handing_off}
-              id="confirm-abort"
-              title="Abort this run?"
-              confirm="Abort"
-              on_confirm={JS.push("abort")}
-            >
-              The agent stops and the run is marked as failed.
-            </.confirm_modal>
-          </:actions>
-        </.header>
+      <%!-- From `lg` up the page fills the window below the app header (2.5rem and its border): only the
+      transcript scrolls, and the header strip, tabs, details and prompt stay in view. On a narrower window the
+      details come under the transcript and the page scrolls as a whole. --%>
+      <div
+        id="run"
+        class="flex min-h-[calc(100dvh-2.5rem-1px)] flex-col lg:h-[calc(100dvh-2.5rem-1px)]"
+      >
+        <.run_header run={@run} />
+        <.error_banner :if={@run.status == :failed && @run.error} error={@run.error} />
 
-        <div :if={@run.status == :failed && @run.error} class="alert alert-error text-sm">
-          <.icon name="hero-exclamation-triangle" class="size-5" />
-          <span class="whitespace-pre-wrap">{@run.error}</span>
-        </div>
-
-        <div :if={@conversations != []} role="tablist" class="tabs tabs-border" id="conversations">
+        <div
+          :if={@conversations != []}
+          role="tablist"
+          aria-label="Conversations"
+          class="tabs tabs-border shrink-0 flex-nowrap overflow-x-auto border-b border-base-300 bg-base-100 px-3"
+          id="conversations"
+        >
           <button
             :for={{conversation, label} <- tab_labels(@conversations)}
             role="tab"
@@ -76,108 +53,309 @@ defmodule ConductorWeb.RunLive do
           </button>
         </div>
 
-        <.message_scroller id="transcript-scroller" key={@selected} class="min-h-80 flex-1">
-          <div id="transcript" phx-update="stream" class="space-y-4">
+        <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <%!-- The scroller centres its content with room for a wide page; here it starts at the left, as wide as
+        the design's transcript column. --%>
+          <.message_scroller
+            id="transcript-scroller"
+            key={@selected}
+            class="min-h-80 min-w-0 flex-[1_1_60dvh] lg:min-h-0 lg:flex-1 [&_[data-scroller-content]]:mx-0 [&_[data-scroller-content]]:max-w-[856px] [&_[data-scroller-viewport]]:px-3 [&_[data-scroller-viewport]]:py-2.5"
+          >
+            <div id="transcript" phx-update="stream" class="space-y-1.5">
+              <div
+                id="transcript-empty"
+                class="hidden py-8 text-center text-sm text-base-content/60 only:block"
+              >
+                Nothing to show yet.
+              </div>
+              <div :for={{dom_id, item} <- @streams.items} id={dom_id}>
+                <.transcript_item item={item} />
+              </div>
+            </div>
+
             <div
-              id="transcript-empty"
-              class="hidden py-8 text-center text-sm text-base-content/60 only:block"
+              :if={@live_thinking != "" or @live_text != "" or @live_tools != %{}}
+              id="live"
+              class="space-y-3"
             >
-              Nothing to show yet.
+              <.reasoning
+                :if={@live_thinking != ""}
+                id="live-thinking"
+                text={@live_thinking}
+                streaming={@live_text == "" and @live_tools == %{}}
+              />
+              <.chat_message :if={@live_text != ""} from="agent" text={@live_text} />
+              <.tool
+                :for={{call_id, tool} <- @live_tools}
+                :if={tool.output != ""}
+                id={"live-tool-#{call_id}"}
+                name={tool.name}
+                args={tool.args}
+                output={tool.output}
+                streaming
+              />
             </div>
-            <div :for={{dom_id, item} <- @streams.items} id={dom_id}>
-              <.transcript_item item={item} />
+
+            <%!-- The agent is at work, with nothing to show for it yet; a group of steps it is adding to says so itself. --%>
+            <div
+              :if={
+                @busy and @tail == nil and @run.status == :running and @live_thinking == "" and
+                  @live_text == "" and
+                  @live_tools == %{}
+              }
+              id="indicator"
+              class="text-base-content/40"
+            >
+              <span class="loading loading-dots loading-sm" aria-label="The agent is working"></span>
             </div>
-          </div>
-
-          <div
-            :if={@live_thinking != "" or @live_text != "" or @live_tools != %{}}
-            id="live"
-            class="space-y-3"
-          >
-            <.reasoning
-              :if={@live_thinking != ""}
-              id="live-thinking"
-              text={@live_thinking}
-              streaming={@live_text == "" and @live_tools == %{}}
-            />
-            <.chat_message :if={@live_text != ""} from="agent" text={@live_text} />
-            <.tool
-              :for={{call_id, tool} <- @live_tools}
-              :if={tool.output != ""}
-              id={"live-tool-#{call_id}"}
-              name={tool.name}
-              args={tool.args}
-              output={tool.output}
-              streaming
-            />
-          </div>
-
-          <%!-- The agent is at work, with nothing to show for it yet; a group of steps it is adding to says so itself. --%>
-          <div
-            :if={
-              @busy and @tail == nil and @run.status == :running and @live_thinking == "" and
-                @live_text == "" and
-                @live_tools == %{}
-            }
-            id="indicator"
-            class="text-base-content/40"
-          >
-            <span class="loading loading-dots loading-sm" aria-label="The agent is working"></span>
-          </div>
-        </.message_scroller>
+          </.message_scroller>
+          <.sidebar run={@run} attempts={@attempts} />
+        </div>
 
         <%!-- The oldest open question is answered here. Without one, what is typed goes to the head agent while it
         works; it waits in the agent's inbox until the tools that are running are done. --%>
-        <%= case @open_questions do %>
-          <% [q | more] -> %>
-            <.chat_prompt id={"answer-#{q.qid}"} phx-submit="answer" placeholder="Your answer">
-              <:header>
-                <div id={"question-#{q.qid}"} class="flex items-start gap-2">
-                  <.icon
-                    name="hero-chat-bubble-left-ellipsis-micro"
-                    class="mt-0.5 size-4 shrink-0 text-warning"
-                  />
-                  <div class="min-w-0">
-                    <div class="text-xs font-medium text-warning">
-                      The agent asks
-                      <span :if={more != []} id="questions-more" class="font-normal">
-                        · {length(more)} more after this
-                      </span>
+        <div
+          :if={@open_questions != [] or not Run.terminal?(@run)}
+          id="prompt-bar"
+          class="shrink-0 border-t border-base-300 bg-base-100 px-3 py-2"
+        >
+          <%= case @open_questions do %>
+            <% [q | more] -> %>
+              <.chat_prompt id={"answer-#{q.qid}"} phx-submit="answer" placeholder="Your answer">
+                <:header>
+                  <div id={"question-#{q.qid}"} class="flex items-start gap-2">
+                    <.icon
+                      name="hero-chat-bubble-left-ellipsis-micro"
+                      class="mt-0.5 size-4 shrink-0 text-warning"
+                    />
+                    <div class="min-w-0">
+                      <div class="text-xs font-medium text-warning">
+                        The agent asks
+                        <span :if={more != []} id="questions-more" class="font-normal">
+                          · {length(more)} more after this
+                        </span>
+                      </div>
+                      <p class="max-h-40 overflow-y-auto whitespace-pre-wrap">{q.text}</p>
                     </div>
-                    <p class="max-h-40 overflow-y-auto whitespace-pre-wrap">{q.text}</p>
                   </div>
-                </div>
-              </:header>
-              <input type="hidden" name="qid" value={q.qid} />
-            </.chat_prompt>
-          <% [] -> %>
-            <.chat_prompt
-              :if={not Run.terminal?(@run)}
-              id="prompt"
-              phx-submit="message"
-              placeholder={prompt_placeholder(@run.status, head?(@conversations, @selected))}
-              on_stop={@run.status != :handing_off && show_modal("confirm-abort")}
-              disabled={@run.status != :running}
-            >
-              <:header :if={@inbox != []}>
-                <ul id="inbox" class="space-y-1">
-                  <li
-                    :for={%{"id" => id} <- @inbox}
-                    id={"inbox-#{id}"}
-                    class="flex items-center gap-2 text-base-content/60"
-                  >
-                    <.icon name="hero-clock-micro" class="size-4 shrink-0" />
-                    <span class="min-w-0 truncate">{@sent[id] || "A message"}</span>
-                    <span class="shrink-0 text-xs">· waits for the agent</span>
-                  </li>
-                </ul>
-              </:header>
-            </.chat_prompt>
-        <% end %>
+                </:header>
+                <input type="hidden" name="qid" value={q.qid} />
+              </.chat_prompt>
+            <% [] -> %>
+              <.chat_prompt
+                :if={not Run.terminal?(@run)}
+                id="prompt"
+                phx-submit="message"
+                placeholder={prompt_placeholder(@run.status, head?(@conversations, @selected))}
+                on_stop={@run.status != :handing_off && show_modal("confirm-abort")}
+                disabled={@run.status != :running}
+              >
+                <:header :if={@inbox != []}>
+                  <ul id="inbox" class="space-y-1">
+                    <li
+                      :for={%{"id" => id} <- @inbox}
+                      id={"inbox-#{id}"}
+                      class="flex items-center gap-2 text-base-content/60"
+                    >
+                      <.icon name="hero-clock-micro" class="size-4 shrink-0" />
+                      <span class="min-w-0 truncate">{@sent[id] || "A message"}</span>
+                      <span class="shrink-0 text-xs">· waits for the agent</span>
+                    </li>
+                  </ul>
+                </:header>
+              </.chat_prompt>
+          <% end %>
+        </div>
       </div>
     </Layouts.app>
     """
   end
+
+  attr :run, Run, required: true
+
+  # The strip under the app header: where the run is, what it is and how it stands, and what can be done with it.
+  defp run_header(assigns) do
+    assigns = assign(assigns, snapshot: assigns.run.issue_snapshot || %{})
+
+    ~H"""
+    <section
+      id="run-header"
+      class="flex shrink-0 flex-wrap items-center gap-3 border-b border-base-300 bg-base-100 px-3 py-2"
+    >
+      <div class="flex min-w-0 flex-[1_1_480px] flex-col gap-[3px]">
+        <div class="flex min-w-0 items-baseline gap-1.5">
+          <.link
+            navigate={~p"/"}
+            id="run-back"
+            class="text-xs text-fg-secondary transition-colors hover:text-link-hover hover:underline"
+          >
+            Runs
+          </.link>
+          <span class="text-fg-faint" aria-hidden="true">/</span>
+          <h1 id="run-title" class="truncate text-sm font-semibold" title={@snapshot["summary"]}>
+            <span id="run-id" class="font-mono font-medium">{@run.id}</span>
+            <span :if={@snapshot["summary"]} id="run-summary">· {@snapshot["summary"]}</span>
+          </h1>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 text-xs text-fg-secondary">
+          <.status_badge id="run-status" status={@run.status} />
+          <span :if={@run.branch} id="run-branch" class="inline-flex items-center gap-1 font-mono">
+            <.icon name="hero-share-micro" class="size-3" />
+            {@run.branch}
+          </span>
+          <span id="run-started">{started(@run)}</span>
+        </div>
+      </div>
+      <div class="flex gap-1">
+        <a
+          :if={@snapshot["url"]}
+          id="open-issue"
+          href={@snapshot["url"]}
+          target="_blank"
+          rel="noopener"
+          class="btn btn-sm h-7 min-h-0 border-line-strong bg-base-100 px-2.5 text-xs font-medium"
+        >
+          Open issue
+        </a>
+        <button
+          :if={@run.status == :failed}
+          id="retry"
+          phx-click="retry"
+          class="btn btn-sm btn-primary h-7 min-h-0 px-2.5 text-xs font-medium"
+        >
+          Retry
+        </button>
+        <button
+          :if={abortable?(@run)}
+          id="abort"
+          phx-click={show_modal("confirm-abort")}
+          class="btn btn-sm h-7 min-h-0 border-chip-error-line bg-base-100 px-2.5 text-xs font-medium text-chip-error-fg"
+        >
+          Abort
+        </button>
+        <.confirm_modal
+          :if={abortable?(@run)}
+          id="confirm-abort"
+          title="Abort this run?"
+          confirm="Abort"
+          on_confirm={JS.push("abort")}
+        >
+          The agent stops and the run is marked as failed.
+        </.confirm_modal>
+      </div>
+    </section>
+    """
+  end
+
+  attr :error, :string, required: true
+
+  # Why a failed run failed, as it was reported: line breaks kept.
+  defp error_banner(assigns) do
+    ~H"""
+    <div
+      id="run-error"
+      role="alert"
+      class="flex shrink-0 items-start gap-2 border-b border-chip-error-line bg-chip-error-bg px-3 py-2 text-xs text-chip-error-fg"
+    >
+      <.icon name="hero-exclamation-triangle-micro" class="mt-px size-3.5 shrink-0" />
+      <span
+        id="run-error-text"
+        class="max-h-40 min-w-0 overflow-y-auto whitespace-pre-wrap break-words font-mono"
+      >{@error}</span>
+    </div>
+    """
+  end
+
+  attr :run, Run, required: true
+  attr :attempts, :list, required: true, doc: "the other runs of the same issue"
+
+  # What the run belongs to and where its work is. `#run-details` is a list of `dt`/`dd` pairs; further blocks
+  # (as a timeline) follow it in the `aside`, each after a rule.
+  defp sidebar(assigns) do
+    ~H"""
+    <aside
+      id="run-sidebar"
+      aria-label="Run details"
+      class="flex shrink-0 flex-col gap-2.5 border-t border-base-300 bg-base-100 px-3 py-2.5 text-xs lg:w-[280px] lg:overflow-y-auto lg:border-l lg:border-t-0"
+    >
+      <dl id="run-details" class="grid grid-cols-[84px_minmax(0,1fr)] gap-x-2 gap-y-1">
+        <dt class="text-fg-secondary">Project</dt>
+        <dd id="run-project">
+          {if @run.project,
+            do: "#{@run.project.project_owner}/#{@run.project.project_number}",
+            else: "—"}
+        </dd>
+
+        <dt class="text-fg-secondary">Repository</dt>
+        <dd id="run-repository" class="break-all font-mono">
+          {(@run.project && @run.project.repo && @run.project.repo.name) || "—"}
+        </dd>
+
+        <dt class="text-fg-secondary">Pull request</dt>
+        <dd id="run-pr" class="min-w-0">
+          <a
+            :if={@run.pr_url}
+            id="run-pr-link"
+            href={@run.pr_url}
+            target="_blank"
+            rel="noopener"
+            class="break-all text-link transition-colors hover:text-link-hover hover:underline"
+          >
+            {pr_label(@run.pr_url)}
+          </a>
+          <span :if={!@run.pr_url} class="text-fg-secondary">Not opened yet</span>
+        </dd>
+
+        <dt class="text-fg-secondary">Attempt</dt>
+        <dd id="run-attempts" class="flex min-w-0 flex-col gap-0.5">
+          <span id="run-attempt">{@run.attempt}</span>
+          <span :for={other <- @attempts} id={"attempt-#{other.id}"} class="flex items-center gap-1.5">
+            <.link
+              navigate={~p"/runs/#{other.id}"}
+              class="truncate font-mono text-link transition-colors hover:text-link-hover hover:underline"
+            >
+              {other.id}
+            </.link>
+            <span
+              data-status={other.status}
+              class={["shrink-0 text-[11px]", status_text(other.status)]}
+            >
+              {status_label(other.status)}
+            </span>
+          </span>
+        </dd>
+
+        <dt class="text-fg-secondary">Workspace</dt>
+        <dd id="run-workspace" class="min-w-0">
+          <span :if={@run.workspace_path} class="break-all font-mono">{@run.workspace_path}</span>
+          <span :if={!@run.workspace_path} class="text-fg-secondary">
+            {if Run.terminal?(@run), do: "Removed", else: "Not created yet"}
+          </span>
+        </dd>
+      </dl>
+    </aside>
+    """
+  end
+
+  defp abortable?(run), do: not Run.terminal?(run) and run.status != :handing_off
+
+  # When the run was picked up, and how long it has taken since, as the runs table counts it.
+  defp started(%{status: :picked_up} = run), do: "picked up #{local_time(run.inserted_at)}"
+  defp started(run), do: "started #{local_time(run.inserted_at)} · #{run_duration(run)}"
+
+  # A pull request by its number (`#221`) when the link ends in one, by the link itself otherwise.
+  defp pr_label(url) do
+    case Regex.run(~r{/pull/(\d+)/?$}, url) do
+      [_, number] -> "##{number}"
+      nil -> url
+    end
+  end
+
+  defp status_text(:failed), do: "text-chip-error-fg"
+  defp status_text(:completed), do: "text-chip-success-fg"
+  defp status_text(:waiting_for_input), do: "text-chip-warning-fg"
+  defp status_text(:picked_up), do: "text-fg-secondary"
+  defp status_text(_status), do: "text-chip-info-fg"
 
   @impl true
   def handle_event("select", %{"conversation" => conversation}, socket) do
@@ -228,9 +406,16 @@ defmodule ConductorWeb.RunLive do
   end
 
   @impl true
-  def handle_info({:run_updated, %{id: id}}, %{assigns: %{run: %{id: other}}} = socket)
-      when id != other,
-      do: {:noreply, socket}
+  # Another run: it only matters here as another attempt of the same issue.
+  def handle_info(
+        {:run_updated, %{id: id} = other},
+        %{assigns: %{run: %{id: current} = run}} = socket
+      )
+      when id != current do
+    if Map.get(other, :issue_key) == run.issue_key,
+      do: {:noreply, assign(socket, attempts: Runs.other_attempts(run))},
+      else: {:noreply, socket}
+  end
 
   def handle_info({:run_updated, run}, socket) do
     run = Runs.get_run!(run.id)
