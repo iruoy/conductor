@@ -442,4 +442,84 @@ defmodule ConductorWeb.RunLiveTest do
       refute has_element?(view, "#abort")
     end
   end
+
+  describe "status history" do
+    test "the sidebar lists every status the run has had, and grows as it changes", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-30", %{status: :running})
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#run-sidebar #run-details + div + #run-timeline", "Timeline")
+      entries = "#run-timeline-entries > li"
+      assert has_element?(view, "#{entries}:nth-child(1)[data-status=picked_up]", "Picked up")
+
+      assert has_element?(
+               view,
+               "#{entries}:nth-child(2)[data-status=provisioning]",
+               "Provisioning"
+             )
+
+      assert has_element?(
+               view,
+               "#{entries}:nth-child(3)[data-status=running]:last-child",
+               "Running"
+             )
+
+      assert has_element?(view, "#{entries}:nth-child(3) time[datetime]")
+      refute has_element?(view, "#run-failed-line")
+
+      {:ok, _waiting} = Runs.wait_for_input(run)
+
+      eventually(fn ->
+        assert has_element?(
+                 view,
+                 "#{entries}:nth-child(4)[data-status=waiting_for_input]:last-child",
+                 "Waiting for input"
+               )
+      end)
+
+      {:ok, _failed} = Runs.fail(Runs.get_run!(run.id), %{error: "boom"})
+
+      eventually(fn ->
+        assert has_element?(
+                 view,
+                 "#{entries}:nth-child(5)[data-status=failed]:last-child",
+                 "Failed"
+               )
+
+        assert has_element?(view, "#run-failed-line time[datetime]")
+      end)
+    end
+
+    test "the head conversation of a failed run ends with the status change", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-31", %{status: :running})
+
+      for {conversation, role} <- [{1, "head"}, {2, "sub:#12"}] do
+        Runs.ingest(%{
+          "type" => "agent_event",
+          "run_id" => run.id,
+          "conversation" => conversation,
+          "role" => role,
+          "event" => %{
+            "type" => "message_end",
+            "entry" => %{"id" => 1, "kind" => "pi.assistant", "content" => []}
+          }
+        })
+      end
+
+      {:ok, _failed} = Runs.fail(run, %{error: "boom"})
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#transcript + #run-failed-line", "status → failed ·")
+      view |> element("#tab-2") |> render_click()
+      refute has_element?(view, "#run-failed-line")
+      view |> element("#tab-1") |> render_click()
+      assert has_element?(view, "#run-failed-line")
+    end
+  end
 end

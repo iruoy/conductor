@@ -14,7 +14,7 @@ defmodule ConductorWeb.RunLive do
     {:ok,
      socket
      |> assign(page_title: run.id, run: run, conversations: conversations)
-     |> assign(attempts: Runs.other_attempts(run))
+     |> assign(attempts: Runs.other_attempts(run), history: Runs.status_history(id))
      |> assign(inbox: [], sent: %{})
      |> assign_questions()
      |> select(default_conversation(conversations))}
@@ -73,6 +73,11 @@ defmodule ConductorWeb.RunLive do
               </div>
             </div>
 
+            <.failed_line
+              :if={@run.status == :failed and head?(@conversations, @selected)}
+              at={failed_at(@history, @run)}
+            />
+
             <div
               :if={@live_thinking != "" or @live_text != "" or @live_tools != %{}}
               id="live"
@@ -109,7 +114,7 @@ defmodule ConductorWeb.RunLive do
               <span class="loading loading-dots loading-sm" aria-label="The agent is working"></span>
             </div>
           </.message_scroller>
-          <.sidebar run={@run} attempts={@attempts} />
+          <.sidebar run={@run} attempts={@attempts} history={@history} />
         </div>
 
         <%!-- The oldest open question is answered here. Without one, what is typed goes to the head agent while it
@@ -269,8 +274,12 @@ defmodule ConductorWeb.RunLive do
   attr :run, Run, required: true
   attr :attempts, :list, required: true, doc: "the other runs of the same issue"
 
-  # What the run belongs to and where its work is. `#run-details` is a list of `dt`/`dd` pairs; further blocks
-  # (as a timeline) follow it in the `aside`, each after a rule.
+  attr :history, :list,
+    required: true,
+    doc: "the statuses the run has had, see `Runs.status_history/1`"
+
+  # What the run belongs to and where its work is, and how it got to where it stands. `#run-details` is a list of
+  # `dt`/`dd` pairs; further blocks follow it in the `aside`, each after a rule.
   defp sidebar(assigns) do
     ~H"""
     <aside
@@ -333,9 +342,73 @@ defmodule ConductorWeb.RunLive do
           </span>
         </dd>
       </dl>
+      <.timeline :if={@history != []} history={@history} />
     </aside>
     """
   end
+
+  attr :history, :list, required: true
+
+  # The statuses the run has had, the first first. A run from before they were kept has none, and no timeline.
+  defp timeline(assigns) do
+    ~H"""
+    <div class="h-px bg-muted"></div>
+    <section id="run-timeline" aria-labelledby="run-timeline-title" class="flex flex-col gap-[3px]">
+      <h2
+        id="run-timeline-title"
+        class="text-[11px] font-normal uppercase tracking-[0.04em] text-fg-secondary"
+      >
+        Timeline
+      </h2>
+      <ol id="run-timeline-entries" class="flex flex-col gap-[3px]">
+        <li
+          :for={entry <- @history}
+          id={"timeline-#{entry.id}"}
+          data-status={entry.status}
+          class="flex items-center gap-2"
+        >
+          <span class={["size-1.5 shrink-0 rounded-full", status_dot(entry.status)]}></span>
+          <span class="min-w-0 flex-1">{String.capitalize(status_label(entry.status))}</span>
+          <time datetime={DateTime.to_iso8601(entry.at)} class="tabular-nums text-fg-secondary">
+            {local_time(entry.at)}
+          </time>
+        </li>
+      </ol>
+    </section>
+    """
+  end
+
+  attr :at, DateTime, required: true
+
+  # How the transcript of a failed run ends: a note as the transcript's other notes, in the colour of an error.
+  # It takes back most of the room the scroller leaves between its parts, to follow the last item as one of them.
+  defp failed_line(assigns) do
+    ~H"""
+    <div
+      id="run-failed-line"
+      class="divider m-0 -mt-2.5 h-auto gap-2 text-[11px] text-chip-error-fg before:h-px before:bg-base-300 after:h-px after:bg-base-300"
+    >
+      <span>
+        status → failed · <time datetime={DateTime.to_iso8601(@at)}>{local_time(@at)}</time>
+      </span>
+    </div>
+    """
+  end
+
+  # When the run failed: the last time it got that status, or its last update for a run without a history.
+  defp failed_at(history, run) do
+    case Enum.find(Enum.reverse(history), &(&1.status == :failed)) do
+      %{at: at} -> at
+      nil -> run.updated_at
+    end
+  end
+
+  # The colour of a status as a dot, as the status chip has it.
+  defp status_dot(:completed), do: "bg-dot-green"
+  defp status_dot(:failed), do: "bg-dot-red"
+  defp status_dot(:waiting_for_input), do: "bg-dot-orange"
+  defp status_dot(:picked_up), do: "bg-dot-grey"
+  defp status_dot(_status), do: "bg-dot-blue"
 
   defp abortable?(run), do: not Run.terminal?(run) and run.status != :handing_off
 
@@ -420,7 +493,7 @@ defmodule ConductorWeb.RunLive do
   def handle_info({:run_updated, run}, socket) do
     run = Runs.get_run!(run.id)
     socket = if Run.terminal?(run), do: socket |> close_tail() |> assign(inbox: []), else: socket
-    {:noreply, assign(socket, run: run)}
+    {:noreply, assign(socket, run: run, history: Runs.status_history(run.id))}
   end
 
   def handle_info({:question, _question}, socket), do: {:noreply, assign_questions(socket)}
