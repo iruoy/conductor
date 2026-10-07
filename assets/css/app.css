@@ -68,6 +68,7 @@
   --line-strong: #3A3D43;
   --fg-secondary: #A0A3AA;
   --fg-tertiary: #7D8087;
+  --fg-neutral: #B8BABE;
   --row-hover: #202226;
   --row-selected: #1B2440;
   --row-waiting: #221A10;
@@ -129,6 +130,7 @@
   --line-strong: #D5D5D0;
   --fg-secondary: #5E6168;
   --fg-tertiary: #8A8C91;
+  --fg-neutral: #4A4D53;
   --row-hover: #F1F1EE;
   --row-selected: #EEF2FC;
   --row-waiting: #FFF8F0;
@@ -195,6 +197,7 @@
   --color-line-strong: var(--line-strong);
   --color-fg-secondary: var(--fg-secondary);
   --color-fg-tertiary: var(--fg-tertiary);
+  --color-fg-neutral: var(--fg-neutral);
   --color-row-hover: var(--row-hover);
   --color-row-selected: var(--row-selected);
   --color-row-waiting: var(--row-waiting);

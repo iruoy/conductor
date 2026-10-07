@@ -1,23 +1,81 @@
 defmodule ConductorWeb.RunComponents do
-  @moduledoc "Pieces shared by the run pages: status badges and transcript items."
+  @moduledoc "Pieces shared by the run pages: the status chip, durations and times, and transcript items."
   use Phoenix.Component
   import ConductorWeb.CoreComponents, only: [icon: 1]
 
-  attr :status, :atom, required: true
+  attr :status, :atom, required: true, doc: "a `Conductor.Runs.Run` status"
+  attr :id, :string, default: nil
+  attr :class, :any, default: nil
 
+  @doc """
+  The status of a run as a pill with a dot, in the colours of the status: under way (`provisioning`, `running`,
+  `handing_off`) info, `waiting_for_input` warning, `completed` success, `failed` error, anything else neutral.
+  The label is the status in words; `data-status` carries the status itself.
+  """
   def status_badge(assigns) do
     ~H"""
-    <span class={["badge badge-sm whitespace-nowrap", badge_class(@status)]}>
-      {String.replace(to_string(@status), "_", " ")}
+    <span
+      id={@id}
+      data-status={@status}
+      class={[
+        "badge h-5 gap-[5px] whitespace-nowrap border-0 px-[7px] align-middle text-[11px] font-medium",
+        badge_class(@status),
+        @class
+      ]}
+    >
+      <span class="size-[5px] rounded-full bg-current"></span>{status_label(@status)}
     </span>
     """
   end
 
-  defp badge_class(:completed), do: "badge-success"
-  defp badge_class(:failed), do: "badge-error"
-  defp badge_class(:waiting_for_input), do: "badge-warning"
-  defp badge_class(status) when status in ~w(running provisioning handing_off)a, do: "badge-info"
-  defp badge_class(_), do: "badge-ghost"
+  @doc "A run status in words: `:waiting_for_input` is \"waiting for input\"."
+  def status_label(status), do: String.replace(to_string(status), "_", " ")
+
+  defp badge_class(:completed), do: "bg-chip-success-bg text-chip-success-fg"
+  defp badge_class(:failed), do: "bg-chip-error-bg text-chip-error-fg"
+  defp badge_class(:waiting_for_input), do: "bg-chip-warning-bg text-chip-warning-fg"
+
+  defp badge_class(status) when status in ~w(running provisioning handing_off)a,
+    do: "bg-chip-info-bg text-chip-info-fg"
+
+  defp badge_class(_), do: "bg-muted text-fg-neutral"
+
+  @doc """
+  How long a run took, to the minute (`<1m`, `21m`, `1h 5m`): from when it was picked up to its last update once
+  it is finished, to `now` while it is under way. A run that has not started (`picked_up`) has none: `—`.
+  """
+  def run_duration(run, now \\ DateTime.utc_now())
+  def run_duration(%{status: :picked_up}, _now), do: "—"
+
+  def run_duration(%{status: status} = run, now) do
+    ended = if status in Conductor.Runs.Run.terminal_statuses(), do: run.updated_at, else: now
+    minutes(DateTime.diff(ended, run.inserted_at, :second))
+  end
+
+  defp minutes(seconds) when seconds < 60, do: "<1m"
+  defp minutes(seconds) when seconds < 3600, do: "#{div(seconds, 60)}m"
+  defp minutes(seconds), do: "#{div(seconds, 3600)}h #{rem(div(seconds, 60), 60)}m"
+
+  @doc """
+  A point in time as the page shows it, in the server's timezone: the time (`14:02`), and the date before it when
+  it is not today (`7 Oct 14:02`). Nothing for `nil`.
+  """
+  def local_time(nil), do: ""
+
+  def local_time(%DateTime{} = at) do
+    local =
+      at
+      |> DateTime.shift_zone!("Etc/UTC")
+      |> DateTime.to_naive()
+      |> NaiveDateTime.truncate(:second)
+      |> NaiveDateTime.to_erl()
+      |> :calendar.universal_time_to_local_time()
+      |> NaiveDateTime.from_erl!()
+
+    {today, _time} = :calendar.local_time()
+    today? = NaiveDateTime.to_date(local) == Date.from_erl!(today)
+    Calendar.strftime(local, if(today?, do: "%H:%M", else: "%-d %b %H:%M"))
+  end
 
   @doc "The DOM id of a persisted or live transcript item."
   def item_dom_id(conversation, entry),
