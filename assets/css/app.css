@@ -32,34 +32,60 @@
   default: false;
   prefersdark: true;
   color-scheme: "dark";
-  --color-base-100: oklch(30.33% 0.016 252.42);
-  --color-base-200: oklch(25.26% 0.014 253.1);
-  --color-base-300: oklch(20.15% 0.012 254.09);
-  --color-base-content: oklch(97.807% 0.029 256.847);
-  --color-primary: oklch(58% 0.233 277.117);
-  --color-primary-content: oklch(96% 0.018 272.314);
-  --color-secondary: oklch(58% 0.233 277.117);
-  --color-secondary-content: oklch(96% 0.018 272.314);
-  --color-accent: oklch(60% 0.25 292.717);
-  --color-accent-content: oklch(96% 0.016 293.756);
-  --color-neutral: oklch(37% 0.044 257.287);
-  --color-neutral-content: oklch(98% 0.003 247.858);
-  --color-info: oklch(58% 0.158 241.966);
-  --color-info-content: oklch(97% 0.013 236.62);
-  --color-success: oklch(60% 0.118 184.704);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(66% 0.179 58.318);
-  --color-warning-content: oklch(98% 0.022 95.277);
-  --color-error: oklch(58% 0.253 17.585);
-  --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.5rem;
+  --color-base-100: #1A1B1F;
+  --color-base-200: #121316;
+  --color-base-300: #2C2E33;
+  --color-base-content: #E8E8E6;
+  --color-primary: #8EA8FF;
+  --color-primary-content: #121316;
+  --color-secondary: #26282D;
+  --color-secondary-content: #E8E8E6;
+  --color-accent: #8EA8FF;
+  --color-accent-content: #121316;
+  --color-neutral: #26282D;
+  --color-neutral-content: #E8E8E6;
+  --color-info: #2F55D4;
+  --color-info-content: #ffffff;
+  --color-success: #1C8A43;
+  --color-success-content: #ffffff;
+  --color-warning: #D9822B;
+  --color-warning-content: #ffffff;
+  --color-error: #C93A2C;
+  --color-error-content: #ffffff;
+  --radius-selector: 9999px;
+  --radius-field: 4px;
+  --radius-box: 8px;
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
-  --border: 1.5px;
-  --depth: 1;
+  --border: 1px;
+  --depth: 0;
   --noise: 0;
+
+  /* Compact palette colours daisyUI has no slot for. Also exposed as Tailwind
+     utilities (bg-surface-2, text-fg-secondary, ...) in the @theme block below. */
+  --surface-2: #16171A;
+  --muted: #26282D;
+  --line-strong: #3A3D43;
+  --fg-secondary: #A0A3AA;
+  --fg-tertiary: #7D8087;
+  --row-hover: #202226;
+  --row-selected: #1B2440;
+  --row-waiting: #221A10;
+  --link: #8EA8FF;
+  --link-hover: #B4C6FF;
+  --chip-info-bg: #1D2747;
+  --chip-info-fg: #9DB4FF;
+  --chip-warning-bg: #3A2610;
+  --chip-warning-fg: #F2B36B;
+  --chip-success-bg: #15301E;
+  --chip-success-fg: #7FD39A;
+  --chip-error-bg: #3B1A17;
+  --chip-error-fg: #FF9C90;
+  --dot-blue: #2F55D4;
+  --dot-orange: #D9822B;
+  --dot-green: #1C8A43;
+  --dot-red: #C93A2C;
+  --dot-grey: #8A8C91;
 }
 
 @plugin "../vendor/daisyui-theme" {
@@ -67,34 +93,139 @@
   default: true;
   prefersdark: false;
   color-scheme: "light";
-  --color-base-100: oklch(98% 0 0);
-  --color-base-200: oklch(96% 0.001 286.375);
-  --color-base-300: oklch(92% 0.004 286.32);
-  --color-base-content: oklch(21% 0.006 285.885);
-  --color-primary: oklch(70% 0.213 47.604);
-  --color-primary-content: oklch(98% 0.016 73.684);
-  --color-secondary: oklch(55% 0.027 264.364);
-  --color-secondary-content: oklch(98% 0.002 247.839);
-  --color-accent: oklch(0% 0 0);
-  --color-accent-content: oklch(100% 0 0);
-  --color-neutral: oklch(44% 0.017 285.786);
-  --color-neutral-content: oklch(98% 0 0);
-  --color-info: oklch(62% 0.214 259.815);
-  --color-info-content: oklch(97% 0.014 254.604);
-  --color-success: oklch(70% 0.14 182.503);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(66% 0.179 58.318);
-  --color-warning-content: oklch(98% 0.022 95.277);
-  --color-error: oklch(58% 0.253 17.585);
-  --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.5rem;
+  --color-base-100: #FFFFFF;
+  --color-base-200: #F6F6F4;
+  --color-base-300: #E3E3DF;
+  --color-base-content: #17181B;
+  --color-primary: #2F55D4;
+  --color-primary-content: #FFFFFF;
+  --color-secondary: #EDEDEA;
+  --color-secondary-content: #17181B;
+  --color-accent: #2F55D4;
+  --color-accent-content: #FFFFFF;
+  --color-neutral: #EDEDEA;
+  --color-neutral-content: #17181B;
+  --color-info: #2F55D4;
+  --color-info-content: #ffffff;
+  --color-success: #1C8A43;
+  --color-success-content: #ffffff;
+  --color-warning: #D9822B;
+  --color-warning-content: #ffffff;
+  --color-error: #C93A2C;
+  --color-error-content: #ffffff;
+  --radius-selector: 9999px;
+  --radius-field: 4px;
+  --radius-box: 8px;
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
-  --border: 1.5px;
-  --depth: 1;
+  --border: 1px;
+  --depth: 0;
   --noise: 0;
+
+  /* Compact palette colours daisyUI has no slot for. Also exposed as Tailwind
+     utilities (bg-surface-2, text-fg-secondary, ...) in the @theme block below. */
+  --surface-2: #FBFBFA;
+  --muted: #EDEDEA;
+  --line-strong: #D5D5D0;
+  --fg-secondary: #5E6168;
+  --fg-tertiary: #8A8C91;
+  --row-hover: #F1F1EE;
+  --row-selected: #EEF2FC;
+  --row-waiting: #FFF8F0;
+  --link: #2F55D4;
+  --link-hover: #1E3CA3;
+  --chip-info-bg: #E6ECFB;
+  --chip-info-fg: #1F3FA8;
+  --chip-warning-bg: #FCEBD9;
+  --chip-warning-fg: #8A4300;
+  --chip-success-bg: #E2F2E6;
+  --chip-success-fg: #1C6B34;
+  --chip-error-bg: #FBE3E1;
+  --chip-error-fg: #A3261B;
+  --dot-blue: #2F55D4;
+  --dot-orange: #D9822B;
+  --dot-green: #1C8A43;
+  --dot-red: #C93A2C;
+  --dot-grey: #8A8C91;
+}
+
+/* IBM Plex, served from priv/static/fonts. Sans is one variable font; Plex Mono ships no
+   variable release, so the three static weights the design uses are bundled. */
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("/fonts/IBMPlexSans-Variable.woff2") format("woff2");
+  font-weight: 100 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/IBMPlexMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/IBMPlexMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/IBMPlexMono-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Per-theme variables above, surfaced as utilities. */
+@theme inline {
+  --color-surface-2: var(--surface-2);
+  --color-muted: var(--muted);
+  --color-line-strong: var(--line-strong);
+  --color-fg-secondary: var(--fg-secondary);
+  --color-fg-tertiary: var(--fg-tertiary);
+  --color-row-hover: var(--row-hover);
+  --color-row-selected: var(--row-selected);
+  --color-row-waiting: var(--row-waiting);
+  --color-link: var(--link);
+  --color-link-hover: var(--link-hover);
+  --color-chip-info-bg: var(--chip-info-bg);
+  --color-chip-info-fg: var(--chip-info-fg);
+  --color-chip-warning-bg: var(--chip-warning-bg);
+  --color-chip-warning-fg: var(--chip-warning-fg);
+  --color-chip-success-bg: var(--chip-success-bg);
+  --color-chip-success-fg: var(--chip-success-fg);
+  --color-chip-error-bg: var(--chip-error-bg);
+  --color-chip-error-fg: var(--chip-error-fg);
+  --color-dot-blue: var(--dot-blue);
+  --color-dot-orange: var(--dot-orange);
+  --color-dot-green: var(--dot-green);
+  --color-dot-red: var(--dot-red);
+  --color-dot-grey: var(--dot-grey);
+}
+
+@layer base {
+  body {
+    font-size: 13px;
+    line-height: 1.35;
+  }
+}
+
+/* Unlayered so it also wins over daisyUI's per-component focus styles. */
+:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
 }
 
 /* Add variants based on LiveView classes */
