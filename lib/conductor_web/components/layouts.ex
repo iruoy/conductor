@@ -57,7 +57,7 @@ defmodule ConductorWeb.Layouts do
           id="nav-runs"
           navigate={~p"/"}
           aria-current={@current_page == :runs && "page"}
-          class="rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
+          class="whitespace-nowrap rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
         >
           Runs
           <span
@@ -75,12 +75,12 @@ defmodule ConductorWeb.Layouts do
           id="nav-config"
           navigate={~p"/config"}
           aria-current={@current_page == :config && "page"}
-          class="rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
+          class="whitespace-nowrap rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
         >
           Config
         </.link>
       </nav>
-      <div class="ml-auto flex items-center gap-2">
+      <div class="ml-auto flex shrink-0 items-center gap-2">
         <div :if={@actions != []} id="header-actions" class="flex items-center gap-2">
           {render_slot(@actions)}
         </div>

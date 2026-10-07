@@ -72,7 +72,8 @@ defmodule ConductorWeb.DashboardLive do
           title="Look for new issues to pick up without waiting for the next check"
           class="btn btn-sm h-7 min-h-0 gap-1.5 border-line-strong bg-base-100 px-2.5 text-xs font-medium"
         >
-          <.icon name="hero-arrow-path" class="size-3.5" /> Check GitHub
+          <.icon name="hero-arrow-path" class="size-3.5" />
+          <span class="sr-only sm:not-sr-only">Check GitHub</span>
         </button>
       </:actions>
       <%!-- Fills the window below the header (2.5rem and its border), so the footer sits at the bottom. --%>
@@ -132,7 +133,7 @@ defmodule ConductorWeb.DashboardLive do
             phx-hook=".RunsKeys"
             tabindex="0"
             aria-label="Runs. j and k move, Enter opens, l shows the live log"
-            class="min-w-0 flex-[999_1_640px] overflow-x-auto -outline-offset-2"
+            class="relative min-w-0 flex-[999_1_640px] overflow-x-auto -outline-offset-2"
           >
             <table class="w-full border-collapse text-[13px]">
               <thead>

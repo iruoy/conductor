@@ -175,12 +175,12 @@ defmodule ConductorWeb.RunLive do
                           · {length(more)} more after this
                         </span>
                       </div>
+                      <%!-- pre-wrap keeps the question's line breaks, so no whitespace around the text --%>
                       <label
                         for={"answer-#{q.qid}-text"}
                         class="block max-h-40 overflow-y-auto whitespace-pre-wrap"
-                      >
-                        {q.text}
-                      </label>
+                        phx-no-format
+                      >{q.text}</label>
                     </div>
                   </div>
                 </:header>
