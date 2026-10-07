@@ -490,6 +490,98 @@ defmodule ConductorWeb.RunLiveTest do
     end
   end
 
+  describe "models" do
+    defp answer(run, conversation, role, id, model) do
+      message = %{
+        "role" => "assistant",
+        "provider" => "faux",
+        "model" => model,
+        "stopReason" => "stop",
+        "content" => [%{"type" => "text", "text" => "Done."}]
+      }
+
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => role,
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{"id" => id, "kind" => "pi.assistant", "model" => [message]}
+        }
+      })
+    end
+
+    test "the details name the head model, with the reasoning level that was set", %{
+      conn: conn,
+      project: project
+    } do
+      models = %{"head" => %{"provider" => "faux", "modelId" => "faux-1", "reasoning" => "high"}}
+      run = run_fixture(project, "shop-20", %{status: :running, models: models})
+      plain = %{"head" => %{"provider" => "faux", "modelId" => "faux-2"}}
+      other = run_fixture(project, "shop-21", %{status: :running, models: plain})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "dl#run-details #run-model-label", "Head model")
+      assert has_element?(view, "#run-model #run-model-id", "faux/faux-1")
+      assert has_element?(view, "#run-model #run-model-reasoning", "high")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{other.id}")
+      assert has_element?(view, "#run-model-id", "faux/faux-2")
+      refute has_element?(view, "#run-model-reasoning")
+    end
+
+    test "a run from before the models were kept says so", %{conn: conn, project: project} do
+      run = run_fixture(project, "shop-22", %{status: :running})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#run-model-label", "Head model")
+      assert has_element?(view, "#run-model", "Not recorded")
+      refute has_element?(view, "#run-model-id")
+    end
+
+    test "a subagent's tab and the details name the model its conversation ran on", %{
+      conn: conn,
+      project: project
+    } do
+      models = %{"head" => %{"provider" => "faux", "modelId" => "faux-1"}}
+      run = run_fixture(project, "shop-23", %{status: :running, models: models})
+      answer(run, 1, "head", 1, "faux-1")
+      answer(run, 2, "sub:#24", 1, "faux-small")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-2[title='faux/faux-small']")
+      refute has_element?(view, "#tab-1[title]")
+      assert has_element?(view, "#run-model-id", "faux/faux-1")
+
+      view |> element("#tab-2") |> render_click()
+      assert has_element?(view, "#run-model-label", "Model")
+      assert has_element?(view, "#run-model-id", "faux/faux-small")
+
+      # A subagent that starts while the page is open is named with its first answer.
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => 3,
+        "role" => "sub:#25",
+        "event" => %{"type" => "message_start", "message" => %{"role" => "assistant"}}
+      })
+
+      eventually(fn -> assert has_element?(view, "#tab-3") end)
+      refute has_element?(view, "#tab-3[title]")
+      view |> element("#tab-3") |> render_click()
+      assert has_element?(view, "#run-model", "Not known yet")
+
+      answer(run, 3, "sub:#25", 1, "faux-large")
+      eventually(fn -> assert has_element?(view, "#tab-3[title='faux/faux-large']") end)
+      assert has_element?(view, "#run-model-id", "faux/faux-large")
+
+      view |> element("#tab-1") |> render_click()
+      assert has_element?(view, "#run-model-label", "Head model")
+      assert has_element?(view, "#run-model-id", "faux/faux-1")
+    end
+  end
+
   describe "status history" do
     test "the sidebar lists every status the run has had, and grows as it changes", %{
       conn: conn,

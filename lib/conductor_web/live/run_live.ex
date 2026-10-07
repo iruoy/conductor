@@ -15,7 +15,7 @@ defmodule ConductorWeb.RunLive do
      socket
      |> assign(page_title: run.id, run: run, conversations: conversations)
      |> assign(attempts: Runs.other_attempts(run), history: Runs.status_history(id))
-     |> assign(inbox: [], sent: %{})
+     |> assign(inbox: [], sent: %{}, models: Runs.conversation_models(id))
      |> assign_questions()
      |> select(default_conversation(conversations))}
   end
@@ -45,6 +45,7 @@ defmodule ConductorWeb.RunLive do
             :for={{conversation, label} <- tab_labels(@conversations)}
             role="tab"
             id={"tab-#{conversation}"}
+            title={tab_title(@conversations, conversation, @models)}
             phx-click="select"
             phx-value-conversation={conversation}
             class={["tab font-mono text-xs", @selected == conversation && "tab-active"]}
@@ -114,7 +115,13 @@ defmodule ConductorWeb.RunLive do
               <span class="loading loading-dots loading-sm" aria-label="The agent is working"></span>
             </div>
           </.message_scroller>
-          <.sidebar run={@run} attempts={@attempts} history={@history} />
+          <.sidebar
+            run={@run}
+            attempts={@attempts}
+            history={@history}
+            head={head?(@conversations, @selected)}
+            model={model(@run, @conversations, @selected, @models)}
+          />
         </div>
 
         <%!-- The oldest open question is answered here. Without one, what is typed goes to the head agent while it
@@ -278,6 +285,12 @@ defmodule ConductorWeb.RunLive do
     required: true,
     doc: "the statuses the run has had, see `Runs.status_history/1`"
 
+  attr :head, :boolean,
+    required: true,
+    doc: "whether the conversation on show is the head agent's"
+
+  attr :model, :map, required: true, doc: "the model choice of the conversation on show, or nil"
+
   # What the run belongs to and where its work is, and how it got to where it stands. `#run-details` is a list of
   # `dt`/`dd` pairs; further blocks follow it in the `aside`, each after a rule.
   defp sidebar(assigns) do
@@ -298,6 +311,19 @@ defmodule ConductorWeb.RunLive do
         <dt class="text-fg-secondary">Repository</dt>
         <dd id="run-repository" class="break-all font-mono">
           {(@run.project && @run.project.repo && @run.project.repo.name) || "—"}
+        </dd>
+
+        <dt id="run-model-label" class="text-fg-secondary">
+          {if @head, do: "Head model", else: "Model"}
+        </dt>
+        <dd id="run-model" class="min-w-0">
+          <span :if={@model} id="run-model-id" class="break-all font-mono">{model_id(@model)}</span>
+          <span :if={@model && @model["reasoning"]} id="run-model-reasoning" class="text-fg-secondary">
+            · {@model["reasoning"]}
+          </span>
+          <span :if={!@model} class="text-fg-secondary">
+            {if @head or Run.terminal?(@run), do: "Not recorded", else: "Not known yet"}
+          </span>
         </dd>
 
         <dt class="text-fg-secondary">Pull request</dt>
@@ -501,6 +527,7 @@ defmodule ConductorWeb.RunLive do
   def handle_info({:agent_event, %{conversation: conversation, role: role, event: event}}, socket) do
     # Messages go to the head agent, whichever conversation is on show.
     socket = if role == "head", do: track_inbox(socket, event), else: socket
+    socket = track_model(socket, conversation, event)
 
     socket =
       if List.keymember?(socket.assigns.conversations, conversation, 0) do
@@ -530,6 +557,26 @@ defmodule ConductorWeb.RunLive do
   end
 
   defp track_inbox(socket, _event), do: socket
+
+  # The model of a conversation is the one its first answer names; a snapshot may bring answers this page missed.
+  defp track_model(%{assigns: %{models: models}} = socket, conversation, _event)
+       when is_map_key(models, conversation),
+       do: socket
+
+  defp track_model(socket, conversation, %{
+         "type" => "message_end",
+         "entry" => %{"kind" => "pi.assistant", "model" => [message | _]}
+       }) do
+    case Runs.entry_model(message) do
+      nil -> socket
+      model -> assign(socket, models: Map.put(socket.assigns.models, conversation, model))
+    end
+  end
+
+  defp track_model(socket, _conversation, %{"type" => "snapshot"}),
+    do: assign(socket, models: Runs.conversation_models(socket.assigns.run.id))
+
+  defp track_model(socket, _conversation, _event), do: socket
 
   # A snapshot follows a runner restart; the database already holds it, so reload from there.
   defp apply_event(socket, conversation, %{"type" => "snapshot"}),
@@ -772,6 +819,33 @@ defmodule ConductorWeb.RunLive do
 
     labels
   end
+
+  # What a tab says when it is pointed at: the model of a subagent's conversation, once it is known. The head's
+  # model is in the details. Anything more a tab should say (such as its state) is another part of this list.
+  defp tab_title(conversations, conversation, models) do
+    model = if head?(conversations, conversation), do: nil, else: models[conversation]
+
+    case Enum.reject([model && model_text(model)], &is_nil/1) do
+      [] -> nil
+      parts -> Enum.join(parts, " · ")
+    end
+  end
+
+  # The model the conversation on show ran on: what the run was started with for the head agent (what its answers
+  # name for a run from before that was kept), and what its answers name for a subagent.
+  defp model(run, conversations, selected, models) do
+    if head?(conversations, selected),
+      do: (run.models || %{})["head"] || models[selected],
+      else: models[selected]
+  end
+
+  defp model_id(%{"provider" => provider, "modelId" => id}), do: "#{provider}/#{id}"
+  defp model_id(%{"modelId" => id}), do: id
+
+  defp model_text(%{"reasoning" => level} = model) when is_binary(level),
+    do: "#{model_id(model)} · #{level}"
+
+  defp model_text(model), do: model_id(model)
 
   # An earlier attempt of a subtask is over, whatever its transcript ends with.
   defp latest_attempt?(conversations, conversation) do
