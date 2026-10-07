@@ -64,23 +64,24 @@ defmodule ConductorWeb.CoreComponents do
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       phx-hook={@kind == :info && "#{__MODULE__}.AutoDismiss"}
       role="alert"
-      class="toast toast-top toast-end z-50"
+      class="toast toast-bottom toast-end z-50 p-3 [&[hidden]]:hidden"
       {@rest}
     >
-      <div class={[
-        "alert w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap",
-        @kind == :info && "alert-info",
-        @kind == :error && "alert-error"
-      ]}>
-        <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
-        <div>
-          <p :if={@title} class="font-semibold">{@title}</p>
-          <p>{msg}</p>
-        </div>
-        <div class="flex-1" />
-        <button type="button" class="group self-start cursor-pointer" aria-label={gettext("close")}>
-          <.icon name="hero-x-mark" class="size-5 opacity-40 group-hover:opacity-70" />
+      <div class="flex max-w-sm items-center gap-2 rounded-box bg-neutral px-3 py-2 text-neutral-content shadow-lg">
+        <span class={[
+          "size-2 shrink-0 rounded-full",
+          @kind == :info && "bg-dot-blue",
+          @kind == :error && "bg-dot-red"
+        ]} />
+        <p class="min-w-0 text-wrap">
+          <span :if={@title} class="font-semibold">{@title} </span>{msg}
+        </p>
+        <button
+          type="button"
+          class="group -mr-1 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded"
+          aria-label={gettext("close")}
+        >
+          <.icon name="hero-x-mark" class="size-3.5 opacity-60 group-hover:opacity-100" />
         </button>
       </div>
     </div>
@@ -483,12 +484,16 @@ defmodule ConductorWeb.CoreComponents do
     ~H"""
     <%!-- LiveView must not patch away the `open` the browser sets while the dialog is shown. --%>
     <dialog id={@id} class="modal" phx-update="ignore">
-      <div class="modal-box whitespace-normal text-left font-normal">
-        <h3 class="text-lg font-bold">{@title}</h3>
-        <p :if={@inner_block != []} class="py-2 text-sm">{render_slot(@inner_block)}</p>
-        <form method="dialog" class="modal-action">
-          <button class="btn">{gettext("Cancel")}</button>
-          <button id={"#{@id}-confirm"} class="btn btn-error" phx-click={@on_confirm}>
+      <div class="modal-box w-[360px] max-w-full whitespace-normal p-3 text-left font-normal">
+        <h3 class="text-sm font-semibold">{@title}</h3>
+        <p :if={@inner_block != []} class="py-2">{render_slot(@inner_block)}</p>
+        <form method="dialog" class="modal-action mt-2 justify-end gap-2">
+          <button class="btn btn-sm h-7 min-h-7">{gettext("Cancel")}</button>
+          <button
+            id={"#{@id}-confirm"}
+            class="btn btn-sm btn-error h-7 min-h-7"
+            phx-click={@on_confirm}
+          >
             {@confirm}
           </button>
         </form>

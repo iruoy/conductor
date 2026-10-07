@@ -22,7 +22,16 @@
             document.documentElement.setAttribute("data-theme", theme);
             document.documentElement.setAttribute("data-theme-source", "user");
           }
+          syncPressed();
         };
+        const syncPressed = () => {
+          const source = document.documentElement.getAttribute("data-theme-source");
+          const active = source === "system" ? "system" : document.documentElement.getAttribute("data-theme");
+          document.querySelectorAll("#theme-toggle [data-phx-theme]").forEach((b) =>
+            b.setAttribute("aria-pressed", String(b.dataset.phxTheme === active)));
+        };
+        window.addEventListener("DOMContentLoaded", syncPressed);
+        window.addEventListener("phx:page-loading-stop", syncPressed);
         if (!document.documentElement.hasAttribute("data-theme")) {
           setTheme(localStorage.getItem("phx:theme") || "system");
         }

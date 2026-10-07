@@ -22,10 +22,10 @@ defmodule ConductorWeb.RunLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
-      <%!-- Fills the window below the navbar (4rem and its border) and inside the padding of <main> (2 × 2rem), so the
+    <Layouts.app flash={@flash} current_page={:runs}>
+      <%!-- Fills the window below the header (2.5rem and its border), padding included, so the
       transcript scrolls in its own frame and the run's header, questions and tabs stay in view. --%>
-      <div id="run" class="flex h-[calc(100dvh-8rem-2px)] flex-col gap-6">
+      <div id="run" class="flex h-[calc(100dvh-2.5rem-1px)] flex-col gap-6 p-4 sm:p-6">
         <.header>
           <span class="font-mono">{@run.id}</span>
           <span class="font-normal">· {(@run.issue_snapshot || %{})["summary"]}</span>

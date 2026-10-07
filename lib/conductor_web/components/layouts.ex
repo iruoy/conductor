@@ -31,29 +31,51 @@ defmodule ConductorWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://phoenix.hexdocs.pm/scopes.html)"
 
+  attr :current_page, :atom,
+    default: nil,
+    values: [nil, :runs, :config],
+    doc: "the page the nav marks as current"
+
+  slot :actions, doc: "page actions, shown on the right of the header before the theme switch"
   slot :inner_block, required: true
 
   def app(assigns) do
     ~H"""
-    <header class="navbar border-b border-base-300 px-4 sm:px-6 lg:px-8">
-      <div class="navbar-start">
-        <.link navigate={~p"/"} class="btn btn-ghost text-lg">
-          <.icon name="hero-musical-note" class="size-5 text-primary" /> Conductor
+    <header
+      id="app-header"
+      class="sticky top-0 z-30 flex h-10 items-center gap-3 border-b border-base-300 bg-base-100 px-3"
+    >
+      <.link navigate={~p"/"} class="flex items-center gap-1.5 font-semibold">
+        <.icon name="hero-musical-note" class="size-4 text-primary" /> Conductor
+      </.link>
+      <nav id="app-nav" class="flex items-center gap-1">
+        <.link
+          id="nav-runs"
+          navigate={~p"/"}
+          aria-current={@current_page == :runs && "page"}
+          class="rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
+        >
+          Runs
         </.link>
-      </div>
-      <nav class="navbar-end gap-2">
-        <ul class="menu menu-horizontal">
-          <li><.link navigate={~p"/"}>Runs</.link></li>
-          <li><.link navigate={~p"/config"}>Config</.link></li>
-        </ul>
-        <.theme_toggle />
+        <.link
+          id="nav-config"
+          navigate={~p"/config"}
+          aria-current={@current_page == :config && "page"}
+          class="rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
+        >
+          Config
+        </.link>
       </nav>
+      <div class="ml-auto flex items-center gap-2">
+        <div :if={@actions != []} id="header-actions" class="flex items-center gap-2">
+          {render_slot(@actions)}
+        </div>
+        <.theme_toggle />
+      </div>
     </header>
 
-    <main class="px-4 py-8 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-6xl space-y-6">
-        {render_slot(@inner_block)}
-      </div>
+    <main id="main">
+      {render_slot(@inner_block)}
     </main>
 
     <.flash_group flash={@flash} />
@@ -116,37 +138,31 @@ defmodule ConductorWeb.Layouts do
   """
   def theme_toggle(assigns) do
     ~H"""
-    <div class="card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full">
-      <div class="absolute w-1/3 h-full rounded-full border-1 border-base-200 bg-base-100 brightness-200 left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-2/3 [[data-theme-source=system]_&]:!left-0 transition-[left]" />
-
+    <%!-- aria-pressed is kept in sync by the theme script in root.html.heex, so LiveView must leave it alone. --%>
+    <div
+      id="theme-toggle"
+      role="group"
+      aria-label={gettext("Theme")}
+      class="flex items-center gap-0.5"
+      phx-update="ignore"
+    >
       <button
-        id="theme-system"
-        aria-label={gettext("Use system theme")}
-        class="flex p-2 cursor-pointer w-1/3"
+        :for={
+          {theme, label, icon} <- [
+            {"light", gettext("Use light theme"), "hero-sun-micro"},
+            {"system", gettext("Use system theme"), "hero-computer-desktop-micro"},
+            {"dark", gettext("Use dark theme"), "hero-moon-micro"}
+          ]
+        }
+        id={"theme-#{theme}"}
+        type="button"
+        aria-label={label}
+        aria-pressed="false"
+        class="flex size-6 cursor-pointer items-center justify-center rounded text-fg-tertiary transition-colors hover:bg-row-hover aria-pressed:bg-muted aria-pressed:text-base-content"
         phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="system"
+        data-phx-theme={theme}
       >
-        <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
-
-      <button
-        id="theme-light"
-        aria-label={gettext("Use light theme")}
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="light"
-      >
-        <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
-      </button>
-
-      <button
-        id="theme-dark"
-        aria-label={gettext("Use dark theme")}
-        class="flex p-2 cursor-pointer w-1/3"
-        phx-click={JS.dispatch("phx:set-theme")}
-        data-phx-theme="dark"
-      >
-        <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
+        <.icon name={icon} class="size-4" />
       </button>
     </div>
     """
