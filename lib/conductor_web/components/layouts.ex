@@ -120,6 +120,8 @@ defmodule ConductorWeb.Layouts do
       <div class="absolute w-1/3 h-full rounded-full border-1 border-base-200 bg-base-100 brightness-200 left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-2/3 [[data-theme-source=system]_&]:!left-0 transition-[left]" />
 
       <button
+        id="theme-system"
+        aria-label={gettext("Use system theme")}
         class="flex p-2 cursor-pointer w-1/3"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="system"
@@ -128,6 +130,8 @@ defmodule ConductorWeb.Layouts do
       </button>
 
       <button
+        id="theme-light"
+        aria-label={gettext("Use light theme")}
         class="flex p-2 cursor-pointer w-1/3"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="light"
@@ -136,6 +140,8 @@ defmodule ConductorWeb.Layouts do
       </button>
 
       <button
+        id="theme-dark"
+        aria-label={gettext("Use dark theme")}
         class="flex p-2 cursor-pointer w-1/3"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="dark"
