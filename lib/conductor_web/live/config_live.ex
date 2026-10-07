@@ -699,6 +699,9 @@ defmodule ConductorWeb.ConfigLive do
       end)
 
     listed? = Enum.any?(options, fn {_, opts} -> Enum.any?(opts, &(elem(&1, 1) == saved)) end)
-    if saved && not listed?, do: [{"saved", [{saved, saved}]} | options], else: options
+
+    if saved not in [nil, ""] and not listed?,
+      do: [{"saved", [{saved, saved}]} | options],
+      else: options
   end
 end

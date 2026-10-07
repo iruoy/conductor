@@ -149,6 +149,11 @@ defmodule ConductorWeb.ConfigLiveTest do
     assert has_element?(view, "#reasoning-head option[value='high'][selected]")
     assert has_element?(view, "#reasoning-low option[value='low']")
 
+    for role <- ~w(medium high) do
+      assert view |> element("#model-#{role} option[value='']") |> render() =~ "Same as head"
+      refute has_element?(view, "#model-#{role} optgroup[label='saved']")
+    end
+
     params = %{
       max_concurrent: "21",
       prune_days: "0",
