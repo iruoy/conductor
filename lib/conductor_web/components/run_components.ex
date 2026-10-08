@@ -659,7 +659,7 @@ defmodule ConductorWeb.RunComponents do
           id={@id && "#{@id}-duration"}
           data-tool-duration
           title="Recorded tool execution time"
-          class="shrink-0 tabular-nums text-fg-tertiary"
+          class="shrink-0 tabular-nums text-fg-secondary"
         >
           {execution_duration(@duration_ms)}
         </span>
