@@ -13,7 +13,12 @@ defmodule ConductorWeb.RunLive do
 
     {:ok,
      socket
-     |> assign(page_title: run.id, run: run, conversations: conversations)
+     |> assign(
+       page_title: run.id,
+       run: run,
+       conversations: conversations,
+       retryable?: Runs.retryable?(run)
+     )
      |> assign(attempts: Runs.other_attempts(run), history: Runs.status_history(id))
      |> assign(inbox: [], sent: %{}, models: Runs.conversation_models(id))
      |> assign(ends: Runs.conversation_ends(id))
@@ -32,7 +37,7 @@ defmodule ConductorWeb.RunLive do
         id="run"
         class="flex min-h-[calc(100dvh-2.5rem-1px)] flex-col lg:h-[calc(100dvh-2.5rem-1px)]"
       >
-        <.run_header run={@run} />
+        <.run_header run={@run} retryable?={@retryable?} />
         <.error_banner :if={@run.status == :failed && @run.error} error={@run.error} />
 
         <div
@@ -225,6 +230,8 @@ defmodule ConductorWeb.RunLive do
 
   attr :run, Run, required: true
 
+  attr :retryable?, :boolean, required: true
+
   # The strip under the app header: where the run is, what it is and how it stands, and what can be done with it.
   defp run_header(assigns) do
     assigns = assign(assigns, snapshot: assigns.run.issue_snapshot || %{})
@@ -270,7 +277,7 @@ defmodule ConductorWeb.RunLive do
           Open issue
         </a>
         <button
-          :if={@run.status == :failed}
+          :if={@retryable?}
           id="retry"
           phx-click="retry"
           class="btn btn-sm btn-primary h-7 min-h-0 px-2.5 text-xs font-medium"
@@ -482,7 +489,7 @@ defmodule ConductorWeb.RunLive do
           class="flex items-center gap-2"
         >
           <span class={["size-1.5 shrink-0 rounded-full", status_dot(entry.status)]}></span>
-          <span class="min-w-0 flex-1">{String.capitalize(status_label(entry.status))}</span>
+          <span class="min-w-0 flex-1">{status_label(entry.status)}</span>
           <time datetime={DateTime.to_iso8601(entry.at)} class="tabular-nums text-fg-secondary">
             {local_time(entry.at)}
           </time>
@@ -602,14 +609,22 @@ defmodule ConductorWeb.RunLive do
       )
       when id != current do
     if Map.get(other, :issue_key) == run.issue_key,
-      do: {:noreply, assign(socket, attempts: Runs.other_attempts(run))},
+      do:
+        {:noreply,
+         assign(socket, attempts: Runs.other_attempts(run), retryable?: Runs.retryable?(run))},
       else: {:noreply, socket}
   end
 
   def handle_info({:run_updated, run}, socket) do
     run = Runs.get_run!(run.id)
     socket = if Run.terminal?(run), do: socket |> close_tail() |> assign(inbox: []), else: socket
-    {:noreply, assign(socket, run: run, history: Runs.status_history(run.id))}
+
+    {:noreply,
+     assign(socket,
+       run: run,
+       history: Runs.status_history(run.id),
+       retryable?: Runs.retryable?(run)
+     )}
   end
 
   def handle_info({:question, _question}, socket), do: {:noreply, assign_questions(socket)}
@@ -1019,9 +1034,9 @@ defmodule ConductorWeb.RunLive do
   defp state_dot("review"), do: "bg-primary"
   defp state_dot("failed"), do: "bg-dot-red"
 
-  defp state_text("waiting"), do: "waiting for input"
+  defp state_text("waiting"), do: "Waiting for input"
   defp state_text("review"), do: "In review"
-  defp state_text(state), do: state
+  defp state_text(state), do: String.capitalize(state)
 
   # What a tab says when it is pointed at: its state, so the dot is not the only way to tell, and for a subagent the
   # model of its conversation once that is known. The head's model is in the details.

@@ -263,8 +263,21 @@ defmodule ConductorWeb.RunComponentsTest do
     end
   end
 
-  test "status_label/1 puts a status in words" do
-    assert status_label(:waiting_for_input) == "waiting for input"
+  test "status_label/1 capitalizes every run status" do
+    labels = %{
+      picked_up: "Picked up",
+      provisioning: "Provisioning",
+      running: "In progress",
+      waiting_for_input: "Waiting for input",
+      handing_off: "Handing off",
+      completed: "In review",
+      merged: "Done",
+      failed: "Failed"
+    }
+
+    for status <- Conductor.Runs.Run.statuses() do
+      assert status_label(status) == Map.fetch!(labels, status)
+    end
   end
 
   # What `selector` matches in a rendered component, and the text of the first match with its white space put right.

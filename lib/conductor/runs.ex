@@ -124,6 +124,13 @@ defmodule Conductor.Runs do
     Run |> Ash.Query.filter(status == :waiting_for_input) |> Ash.count!()
   end
 
+  @doc "Only the latest failed attempt of an issue can be retried."
+  def retryable?(%Run{status: :failed, issue_key: key, attempt: attempt}) do
+    not (Run |> Ash.Query.filter(issue_key == ^key and attempt > ^attempt) |> Ash.exists?())
+  end
+
+  def retryable?(%Run{}), do: false
+
   @doc "The other runs of the same issue as `run`, the first attempt first."
   def other_attempts(%Run{id: id, issue_key: issue_key}) do
     Run

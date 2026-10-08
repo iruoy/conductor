@@ -224,7 +224,7 @@ defmodule ConductorWeb.DashboardLive do
                   <td class="whitespace-nowrap py-0 pl-1 pr-2 text-right">
                     <div class="inline-flex items-center gap-0.5">
                       <button
-                        :if={run.status == :failed}
+                        :if={Runs.retryable?(run)}
                         id={"retry-#{run.id}"}
                         type="button"
                         phx-click="retry"
@@ -501,6 +501,17 @@ defmodule ConductorWeb.DashboardLive do
 
         true ->
           socket
+      end
+
+    # A new attempt changes Retry on earlier rows, even when it is outside the filter.
+    socket =
+      if not shown? do
+        run
+        |> Runs.other_attempts()
+        |> Enum.filter(&MapSet.member?(run_ids, &1.id))
+        |> Enum.reduce(socket, &stream_insert(&2, :runs, &1))
+      else
+        socket
       end
 
     socket = socket |> assign(now: DateTime.utc_now()) |> assign_counts()

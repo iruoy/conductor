@@ -96,6 +96,36 @@ defmodule Conductor.CoordinatorTest do
     assert [%{answer: "left"}] = Runs.list_questions("shop-6-1")
   end
 
+  test "only failed runs can be retried", %{project: project} do
+    for {status, n} <- Enum.with_index(Conductor.Runs.Run.statuses(), 100), status != :failed do
+      run = run_fixture(project, "shop-#{n}", %{status: status})
+      expected = if Conductor.Runs.Run.terminal?(run), do: :not_retryable, else: :still_open
+
+      assert {:error, ^expected} = Coordinator.retry(run.id)
+      assert Runs.other_attempts(run) == []
+
+      assert {:reply, {:error, ^expected}, %{jobs: %{}}} =
+               Coordinator.handle_call({:retry, run.id, run.issue_snapshot}, nil, %{jobs: %{}})
+    end
+  end
+
+  test "a retry permanently supersedes its failed predecessor", %{tmp_dir: dir, project: project} do
+    settings_fixture(%{max_concurrent: 0})
+    start_workers(dir)
+    first = run_fixture(project, "shop-70", %{status: :failed})
+
+    assert {:ok, second} = Coordinator.retry(first.id)
+    assert {:error, :not_retryable} = Coordinator.retry(first.id)
+    assert {:ok, second} = Runs.fail(second)
+    assert {:error, :not_retryable} = Coordinator.retry(first.id)
+
+    assert {:reply, {:error, :not_retryable}, %{jobs: %{}}} =
+             Coordinator.handle_call({:retry, first.id, first.issue_snapshot}, nil, %{jobs: %{}})
+
+    assert {:ok, %{attempt: 3}} = Coordinator.retry(second.id)
+    assert {:error, :not_retryable} = Coordinator.retry(second.id)
+  end
+
   test "abort and retry", %{tmp_dir: dir, project: project} do
     start_workers(dir)
     {:ok, _} = Coordinator.enqueue(project, "shop-7", snapshot("shop-7", "Hang [fake:hang]"))

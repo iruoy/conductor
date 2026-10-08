@@ -28,11 +28,13 @@ defmodule ConductorWeb.RunComponents do
     """
   end
 
-  @doc "A run status in words: `:waiting_for_input` is \"waiting for input\"."
+  @doc "A capitalized run status in words: `:waiting_for_input` is \"Waiting for input\"."
   def status_label(:running), do: "In progress"
   def status_label(:completed), do: "In review"
   def status_label(:merged), do: "Done"
-  def status_label(status), do: String.replace(to_string(status), "_", " ")
+
+  def status_label(status),
+    do: status |> to_string() |> String.replace("_", " ") |> String.capitalize()
 
   defp badge_class(:completed), do: "bg-chip-info-bg text-primary"
   defp badge_class(:merged), do: "bg-chip-success-bg text-chip-success-fg"

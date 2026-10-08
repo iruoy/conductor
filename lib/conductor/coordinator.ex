@@ -18,17 +18,21 @@ defmodule Conductor.Coordinator do
   def enqueue(project, issue_key, snapshot),
     do: GenServer.call(__MODULE__, {:enqueue, project, issue_key, snapshot})
 
-  @doc "Queues the next attempt of a finished run's issue, with a fresh issue snapshot when GitHub answers."
+  @doc "Queues the next attempt of a failed run's issue, with a fresh issue snapshot when GitHub answers."
   def retry(run_id) do
     run = Runs.get_run!(run_id)
 
-    snapshot =
-      case GitHub.issue(run.project, GitHub.number(run.issue_key)) do
-        {:ok, snapshot} -> snapshot
-        {:error, _} -> run.issue_snapshot
-      end
+    if Runs.retryable?(run) do
+      snapshot =
+        case GitHub.issue(run.project, GitHub.number(run.issue_key)) do
+          {:ok, snapshot} -> snapshot
+          {:error, _} -> run.issue_snapshot
+        end
 
-    GenServer.call(__MODULE__, {:retry, run_id, snapshot})
+      GenServer.call(__MODULE__, {:retry, run_id, snapshot})
+    else
+      {:error, if(Run.terminal?(run), do: :not_retryable, else: :still_open)}
+    end
   end
 
   def abort(run_id), do: GenServer.call(__MODULE__, {:abort, run_id}, 30_000)
@@ -100,6 +104,7 @@ defmodule Conductor.Coordinator do
 
     cond do
       not Run.terminal?(run) -> {:reply, {:error, :still_open}, state}
+      not Runs.retryable?(run) -> {:reply, {:error, :not_retryable}, state}
       Runs.open_issue_keys([run.issue_key]) != [] -> {:reply, {:error, :already_open}, state}
       true -> {:reply, Runs.create_run(run.project, run.issue_key, snapshot), pump(state)}
     end

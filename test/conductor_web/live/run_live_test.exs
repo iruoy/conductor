@@ -814,15 +814,19 @@ defmodule ConductorWeb.RunLiveTest do
                first.id
              )
 
-      assert has_element?(view, "#attempt-#{first.id} [data-status=failed]", "failed")
+      assert has_element?(view, "#attempt-#{first.id} [data-status=failed]", "Failed")
       refute has_element?(view, "#attempt-#{second.id}")
       refute has_element?(view, "#attempt-#{other_issue.id}")
+
+      {:ok, earlier, _} = live(conn, ~p"/runs/#{first.id}")
+      refute has_element?(earlier, "#retry")
 
       # A retry is another attempt, listed as soon as it is there.
       {:ok, third} = Runs.create_run(project, "shop-7", snapshot("shop-7"))
 
       eventually(fn ->
         assert has_element?(view, "#attempt-#{third.id} [data-status=picked_up]")
+        refute has_element?(view, "#retry")
       end)
     end
 
@@ -910,8 +914,8 @@ defmodule ConductorWeb.RunLiveTest do
       answer(run, 2, "sub:#24", 1, "faux-small")
 
       {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-      assert has_element?(view, "#tab-2[title='done · faux/faux-small']")
-      assert has_element?(view, "#tab-1[title='working']")
+      assert has_element?(view, "#tab-2[title='Done · faux/faux-small']")
+      assert has_element?(view, "#tab-1[title='Working']")
       assert has_element?(view, "#run-model-id", "faux/faux-1")
 
       view |> element("#tab-2") |> render_click()
@@ -928,12 +932,12 @@ defmodule ConductorWeb.RunLiveTest do
       })
 
       eventually(fn -> assert has_element?(view, "#tab-3") end)
-      assert has_element?(view, "#tab-3[title=working]")
+      assert has_element?(view, "#tab-3[title=Working]")
       view |> element("#tab-3") |> render_click()
       assert has_element?(view, "#run-model", "Not known yet")
 
       answer(run, 3, "sub:#25", 1, "faux-large")
-      eventually(fn -> assert has_element?(view, "#tab-3[title='done · faux/faux-large']") end)
+      eventually(fn -> assert has_element?(view, "#tab-3[title='Done · faux/faux-large']") end)
       assert has_element?(view, "#run-model-id", "faux/faux-large")
 
       view |> element("#tab-1") |> render_click()
@@ -968,8 +972,8 @@ defmodule ConductorWeb.RunLiveTest do
       entry(run, 3, "sub:#13", 1, "pi.assistant", "toolUse")
 
       {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-      assert has_element?(view, "#tab-1[data-state=working][title=working] [data-pulse]")
-      assert has_element?(view, "#tab-2[data-state=done][title=done] :not([data-pulse])")
+      assert has_element?(view, "#tab-1[data-state=working][title=Working] [data-pulse]")
+      assert has_element?(view, "#tab-2[data-state=done][title=Done] :not([data-pulse])")
       assert has_element?(view, "#tab-3[data-state=working] [data-pulse]")
     end
 
@@ -978,7 +982,7 @@ defmodule ConductorWeb.RunLiveTest do
       entry(run, 1, "head", 1, "pi.assistant", "toolUse")
 
       {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-      assert has_element?(view, "#tab-1[data-state=waiting][title='waiting for input']")
+      assert has_element?(view, "#tab-1[data-state=waiting][title='Waiting for input']")
       assert has_element?(view, "#tab-1 :not([data-pulse])")
     end
 
@@ -1005,7 +1009,7 @@ defmodule ConductorWeb.RunLiveTest do
       entry(run, 3, "sub:#13", 1, "pi.assistant", "stop")
 
       {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-      assert has_element?(view, "#tab-1[data-state=failed][title=failed]")
+      assert has_element?(view, "#tab-1[data-state=failed][title=Failed]")
       assert has_element?(view, "#tab-2[data-state=failed]")
       assert has_element?(view, "#tab-3[data-state=done]")
     end

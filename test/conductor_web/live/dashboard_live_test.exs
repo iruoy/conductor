@@ -66,6 +66,25 @@ defmodule ConductorWeb.DashboardLiveTest do
     eventually(fn -> assert render(view) =~ "shop-1-2" end)
   end
 
+  test "only the latest failed attempt offers Retry, also across filters", %{
+    conn: conn,
+    project: project
+  } do
+    first = run_fixture(project, "shop-70", %{status: :failed})
+    {:ok, view, _} = live(conn, ~p"/?status=failed")
+    assert has_element?(view, "#retry-#{first.id}")
+
+    second = run_fixture(project, "shop-70")
+    refute has_element?(view, "#retry-#{first.id}")
+    {:ok, _} = Runs.fail(second)
+    assert has_element?(view, "#retry-#{second.id}")
+    refute has_element?(view, "#retry-#{first.id}")
+
+    {:ok, reloaded, _} = live(conn, ~p"/")
+    refute has_element?(reloaded, "#retry-#{first.id}")
+    assert has_element?(reloaded, "#retry-#{second.id}")
+  end
+
   test "renders each status with its chip, links and actions", %{conn: conn, project: project} do
     run_fixture(project, "shop-1")
     run_fixture(project, "shop-2", %{status: :provisioning})
@@ -79,10 +98,11 @@ defmodule ConductorWeb.DashboardLiveTest do
     })
 
     run_fixture(project, "shop-7", %{status: :failed, error: "boom"})
+    run_fixture(project, "shop-8", %{status: :merged})
 
     {:ok, view, _html} = live(conn, ~p"/")
 
-    assert has_element?(view, "#runs-count", "7 of 7 runs")
+    assert has_element?(view, "#runs-count", "8 of 8 runs")
 
     for {n, status, chip} <- [
           {1, "picked_up", "bg-muted"},
@@ -91,7 +111,8 @@ defmodule ConductorWeb.DashboardLiveTest do
           {4, "waiting_for_input", "bg-chip-warning-bg"},
           {5, "handing_off", "bg-chip-info-bg"},
           {6, "completed", "bg-chip-info-bg"},
-          {7, "failed", "bg-chip-error-bg"}
+          {7, "failed", "bg-chip-error-bg"},
+          {8, "merged", "bg-chip-success-bg"}
         ] do
       id = "shop-#{n}-1"
       assert has_element?(view, ~s|#status-#{id}.#{chip}[data-status="#{status}"]|)
@@ -100,7 +121,7 @@ defmodule ConductorWeb.DashboardLiveTest do
       assert has_element?(view, "#updated-#{id}")
     end
 
-    assert has_element?(view, "#status-shop-4-1", "waiting for input")
+    assert has_element?(view, "#status-shop-4-1", "Waiting for input")
 
     # Answer: on the run that waits for input only.
     assert has_element?(view, ~s|a#answer-shop-4-1[href="/runs/shop-4-1"]|)
@@ -121,7 +142,7 @@ defmodule ConductorWeb.DashboardLiveTest do
 
     # Retry: on failed runs only.
     assert has_element?(view, "#retry-shop-7-1")
-    for n <- 1..6, do: refute(has_element?(view, "#retry-shop-#{n}-1"))
+    for n <- [1, 2, 3, 4, 5, 6, 8], do: refute(has_element?(view, "#retry-shop-#{n}-1"))
 
     # Abort: until the run hands off.
     for n <- 1..4 do
