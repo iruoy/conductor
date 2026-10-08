@@ -191,7 +191,7 @@ defmodule ConductorWeb.RunComponentsTest do
       end
     end
 
-    test "diff contents remain literal inside their existing addition and deletion styling" do
+    test "diff contents remain literal inside Makeup addition and deletion styling" do
       literal = "\e[31m<svg onload='alert(1)'> & café\e[0m [1m[30m[46m"
 
       html =
@@ -202,7 +202,7 @@ defmodule ConductorWeb.RunComponentsTest do
           output: "\e[32mnot shown\e[0m"
         )
 
-      for selector <- ["[data-diff] > .text-error", "[data-diff] > .text-success"] do
+      for selector <- ["[data-diff] > .gd", "[data-diff] > .gi"] do
         assert LazyHTML.text(find(html, selector)) =~ literal
         refute found?(html, selector <> " [style]")
       end
@@ -736,8 +736,8 @@ defmodule ConductorWeb.RunComponentsTest do
         })
 
       html = show(steps([call("t1", "edit", %{"path" => "a.ex"}, edited)]))
-      assert text(html, "[data-tool=edit] [data-diff] .text-success") =~ "new"
-      assert text(html, "[data-tool=edit] [data-diff] .text-error") =~ "old"
+      assert text(html, "[data-tool=edit] [data-diff] .gi") =~ "new"
+      assert text(html, "[data-tool=edit] [data-diff] .gd") =~ "old"
       refute found?(html, "[data-tool-output]")
 
       html =

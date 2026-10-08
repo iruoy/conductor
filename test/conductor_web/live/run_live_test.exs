@@ -564,20 +564,11 @@ defmodule ConductorWeb.RunLiveTest do
     send_event.(%{"type" => "message_end", "entry" => entry})
 
     assert has_element?(view, "#items-ev-4-e-6-0 [data-tool=edit] [data-tool-call]", "lib/a.ex")
-    # Each line has its number in the old file and in the new one.
-    lines =
-      view
-      |> render()
-      |> LazyHTML.from_fragment()
-      |> LazyHTML.query("#items-ev-4-e-6-0 [data-diff] > span")
-      |> Enum.map(fn line ->
-        {line |> LazyHTML.query("[data-old]") |> LazyHTML.text(),
-         line |> LazyHTML.query("[data-new]") |> LazyHTML.text()}
-      end)
+    # Makeup preserves the tool's numbered diff and styles additions and deletions.
+    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff]", "1 same")
 
-    assert lines == [{"1", "1"}, {"2", ""}, {"", "2"}, {"", "3"}, {"3", "4"}]
-    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff] .text-success", "new")
-    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff] .text-error", "old")
+    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff] .gi", "+ 2 new")
+    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff] .gd", "- 2 old")
     refute render(view) =~ "Replaced 1 block"
 
     # The same shows after a reload.
