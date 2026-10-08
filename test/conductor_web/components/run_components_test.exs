@@ -54,6 +54,17 @@ defmodule ConductorWeb.RunComponentsTest do
     end
   end
 
+  # WCAG relative luminance for the opaque sRGB theme tokens.
+  defp relative_luminance("#" <> hex) do
+    channels =
+      for <<channel::binary-size(2) <- hex>> do
+        value = String.to_integer(channel, 16) / 255
+        if value <= 0.04045, do: value / 12.92, else: :math.pow((value + 0.055) / 1.055, 2.4)
+      end
+
+    Enum.zip_with(channels, [0.2126, 0.7152, 0.0722], &(&1 * &2)) |> Enum.sum()
+  end
+
   defp show(item), do: render_component(&transcript_item/1, item: item)
 
   defp user(text),
@@ -156,6 +167,37 @@ defmodule ConductorWeb.RunComponentsTest do
   end
 
   describe "recorded execution timings" do
+    test "tool durations use readable secondary text on the tool background in every state" do
+      for state <- [
+            [],
+            [streaming: true],
+            [done: true],
+            [error: true],
+            [exit_code: 0],
+            [exit_code: 1]
+          ] do
+        html = render_component(&tool/1, [name: "bash", duration_ms: 125] ++ state)
+
+        assert found?(html, "[data-tool].bg-base-100")
+        assert found?(html, "[data-tool-duration].text-fg-secondary.tabular-nums")
+        refute found?(html, "[data-tool-duration].text-fg-tertiary")
+      end
+    end
+
+    test "duration foreground and background theme tokens meet WCAG AA in light and dark" do
+      css = File.read!(Path.expand("../../../assets/css/app.css", __DIR__))
+
+      for theme <- ["light", "dark"] do
+        [_, palette] = Regex.run(~r/name: "#{theme}";(.*?)\n\}/s, css)
+        [_, foreground] = Regex.run(~r/--fg-secondary: (#[0-9A-Fa-f]{6});/, palette)
+        [_, background] = Regex.run(~r/--color-base-100: (#[0-9A-Fa-f]{6});/, palette)
+        luminances = Enum.map([foreground, background], &relative_luminance/1)
+        contrast = (Enum.max(luminances) + 0.05) / (Enum.min(luminances) + 0.05)
+
+        assert contrast >= 4.5, "#{theme} tool duration contrast is #{contrast}:1"
+      end
+    end
+
     test "tool timing includes zero and subsecond executions; old and invalid results omit it" do
       for {ms, expected} <- [{0, "0ms"}, {125, "125ms"}, {1250, "1.3s"}, {61_000, "1m 1s"}] do
         payload = result("bash", "ok")
