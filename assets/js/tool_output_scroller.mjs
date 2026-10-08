@@ -7,6 +7,9 @@ export default {
     this.expectedTop = null
 
     this.onScroll = () => {
+      // Collapsed panels have zero geometry, not a reader returning to the end.
+      if (this.el.clientHeight === 0) return
+
       if (this.atEnd()) {
         this.following = true
         this.expectedTop = null
@@ -43,7 +46,7 @@ export default {
   },
 
   follow() {
-    if (!this.following) return
+    if (!this.following || this.el.clientHeight === 0) return
 
     const top = Math.max(0, this.el.scrollHeight - this.el.clientHeight)
     if (this.el.scrollTop !== top) {
