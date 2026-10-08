@@ -70,6 +70,46 @@ describe("runner protocol", () => {
 		expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
 	});
 
+	it("preserves bash ANSI and BEL-terminated OSC through live updates and durable results", async () => {
+		const ansi = "\u001b[31mvitest output\u001b[0m";
+		const osc = "\u001b]0;conductor title\u0007";
+		const expected = `${ansi}${osc}`;
+		const { runner, events } = await setup([
+			fauxAssistantMessage(
+				[
+					fauxToolCall(
+						"bash",
+						{ command: "printf '\\033[31mvitest output\\033[0m\\033]0;conductor title\\007\\000'" },
+						{ id: "ansi-call" },
+					),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("Done.\nDONE"),
+		]);
+
+		await start(runner, "ANSI-1-1");
+		await settledEvent(events, "ANSI-1-1");
+
+		const streamedOutput = events.flatMap((event) => {
+			if (event.type !== "agent_event" || (event.event as { type?: string }).type !== "tool_execution_update") return [];
+			const output = (event.event as { output?: { append?: string; set?: string } }).output;
+			return [`${output?.append ?? ""}${output?.set ?? ""}`];
+		});
+		expect(streamedOutput.join("")).toContain(expected);
+		expect(streamedOutput.join("")).not.toContain("\u0000");
+
+		const toolResult = events.find(
+			(event) =>
+				event.type === "agent_event" &&
+				(event.event as { type?: string; entry?: { kind?: string } }).type === "message_end" &&
+				(event.event as { entry?: { kind?: string } }).entry?.kind === "pi.tool-result",
+		) as { event: { entry: { model: { content: { text?: string }[] }[] } } } | undefined;
+		const resultText = toolResult?.event.entry.model[0]?.content[0]?.text;
+		expect(resultText).toBe(expected);
+		expect(resultText).not.toContain("\u0000");
+	});
+
 	it("treats a duplicate start_run as a no-op", async () => {
 		const { runner, events, faux } = await setup([fauxAssistantMessage("DONE")]);
 		const first = (await start(runner, "PROJ-2-1")) as { conversation_id: number };

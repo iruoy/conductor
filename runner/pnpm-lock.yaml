@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@earendil-works/pi-durable@1.1.0': 80782480e80b127be58e09cc93ad56188b5e829ac9c2f4edcd3c2d4fc2a75a94
+
 importers:
 
   .:
@@ -16,7 +19,7 @@ importers:
         version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
       '@earendil-works/pi-durable':
         specifier: 1.1.0
-        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
+        version: 1.1.0(patch_hash=80782480e80b127be58e09cc93ad56188b5e829ac9c2f4edcd3c2d4fc2a75a94)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -1319,7 +1322,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-durable@1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)':
+  '@earendil-works/pi-durable@1.1.0(patch_hash=80782480e80b127be58e09cc93ad56188b5e829ac9c2f4edcd3c2d4fc2a75a94)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)':
     dependencies:
       '@earendil-works/chord': 1.1.0
       '@earendil-works/pi-ai': 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
