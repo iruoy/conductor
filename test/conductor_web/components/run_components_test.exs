@@ -97,6 +97,57 @@ defmodule ConductorWeb.RunComponentsTest do
     }
   end
 
+  describe "recorded execution timings" do
+    test "tool timing includes zero and subsecond executions; old and invalid results omit it" do
+      for {ms, expected} <- [{0, "0ms"}, {125, "125ms"}, {1250, "1.3s"}, {61_000, "1m 1s"}] do
+        payload = result("bash", "ok")
+
+        payload =
+          Map.update!(payload, "model", fn [message] -> [Map.put(message, "durationMs", ms)] end)
+
+        html = show(steps([call("t1", "bash", %{}, payload)]))
+        assert text(html, "#tool-t1-duration[data-tool-duration]") == expected
+      end
+
+      for ms <- [nil, -1, "bad"] do
+        payload = result("bash", "ok")
+
+        payload =
+          Map.update!(payload, "model", fn [message] -> [Map.put(message, "durationMs", ms)] end)
+
+        refute found?(show(steps([call("t1", "bash", %{}, payload)])), "[data-tool-duration]")
+      end
+    end
+
+    test "model response timing is shown once without duplicating multi-block responses" do
+      item = %{
+        id: "assistant",
+        kind: "pi.assistant",
+        payload: %{
+          "model" => [
+            %{
+              "model" => "gpt-5.4",
+              "durationMs" => 2500,
+              "stopReason" => "stop",
+              "content" => [
+                %{"type" => "text", "text" => "Hello"},
+                %{"type" => "text", "text" => "Done"}
+              ]
+            }
+          ]
+        }
+      }
+
+      shown = parts(item)
+      assert length(Enum.filter(shown, &(&1.kind == "model-timing"))) == 1
+      assert text(show(hd(shown)), "#assistant-timing[data-model-duration]") == "gpt-5.4 · 2.5s"
+      assert List.last(shown).final
+
+      old = put_in(item.payload["model"], [%{"content" => [], "stopReason" => "stop"}])
+      refute Enum.any?(parts(old), &(&1.kind == "model-timing"))
+    end
+  end
+
   describe "exit_code/1" do
     test "a command that went well exited with 0" do
       assert exit_code(result("bash", "6 tests, 0 failures")) == 0

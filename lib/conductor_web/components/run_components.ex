@@ -168,10 +168,25 @@ defmodule ConductorWeb.RunComponents do
       |> Enum.flat_map(fn {block, index} -> part("#{id}-#{index}", block) end)
       |> join_steps()
 
-    case stop_notice(message) do
-      nil -> answer(parts, message)
-      notice -> parts ++ [%{id: "#{id}-error", kind: "error", text: notice}]
-    end
+    timing =
+      if valid_duration?(message["durationMs"]) do
+        [
+          %{
+            id: "#{id}-timing",
+            kind: "model-timing",
+            ms: message["durationMs"],
+            model: message["model"] || "Model"
+          }
+        ]
+      else
+        []
+      end
+
+    timing ++
+      case stop_notice(message) do
+        nil -> answer(parts, message)
+        notice -> parts ++ [%{id: "#{id}-error", kind: "error", text: notice}]
+      end
   end
 
   def parts(item), do: [item]
@@ -554,6 +569,10 @@ defmodule ConductorWeb.RunComponents do
   attr :done, :boolean, default: false, doc: "the tool has answered"
   attr :error, :boolean, default: false
 
+  attr :duration_ms, :any,
+    default: nil,
+    doc: "recorded execution time, not wall-clock elapsed time"
+
   attr :exit_code, :integer,
     default: nil,
     doc: "what a command that has ended exited with, see `exit_code/1`"
@@ -598,6 +617,15 @@ defmodule ConductorWeb.RunComponents do
           {@line}
         </span>
         <span class="flex-1"></span>
+        <span
+          :if={valid_duration?(@duration_ms)}
+          id={@id && "#{@id}-duration"}
+          data-tool-duration
+          title="Recorded tool execution time"
+          class="shrink-0 tabular-nums text-fg-tertiary"
+        >
+          {execution_duration(@duration_ms)}
+        </span>
         <span
           :if={@status}
           data-tool-status={@status.state}
@@ -847,6 +875,19 @@ defmodule ConductorWeb.RunComponents do
     """
   end
 
+  def transcript_item(%{item: %{kind: "model-timing"}} = assigns) do
+    ~H"""
+    <div
+      id={@item.id}
+      data-model-duration
+      title="Recorded model response time"
+      class="text-[11px] tabular-nums text-fg-tertiary"
+    >
+      {@item.model} · {execution_duration(@item.ms)}
+    </div>
+    """
+  end
+
   # A single step needs no group around it.
   def transcript_item(%{item: %{kind: "steps", steps: [step]}} = assigns) do
     assigns = assign(assigns, :step, step)
@@ -903,6 +944,7 @@ defmodule ConductorWeb.RunComponents do
       output={result_text(@item.payload)}
       error={result_error?(@item.payload)}
       exit_code={exit_code(@item.payload)}
+      duration_ms={message(@item.payload)["durationMs"]}
       done
     />
     """
@@ -962,12 +1004,14 @@ defmodule ConductorWeb.RunComponents do
   defp step(%{step: %{type: :tool}} = assigns) do
     ~H"""
     <.tool
+      id={"tool-#{@step.id}"}
       name={@step.name}
       args={@step.args}
       output={result_text(@step.result)}
       diff={@step.result && message(@step.result)["details"]["diff"]}
       error={result_error?(@step.result)}
       exit_code={exit_code(@step.result)}
+      duration_ms={@step.result && message(@step.result)["durationMs"]}
       done={@step.result != nil}
       streaming={@active and @step.result == nil}
     />
@@ -980,6 +1024,12 @@ defmodule ConductorWeb.RunComponents do
       count -> "#{count} failed"
     end
   end
+
+  defp valid_duration?(ms), do: is_number(ms) and ms >= 0
+
+  defp execution_duration(ms) when ms < 1000, do: "#{round(ms)}ms"
+  defp execution_duration(ms) when ms < 60_000, do: "#{Float.round(ms / 1000, 1)}s"
+  defp execution_duration(ms), do: duration(round(ms))
 
   defp duration(ms) when ms < 60_000, do: "#{max(div(ms, 1000), 1)}s"
   defp duration(ms) when ms < 3_600_000, do: "#{div(ms, 60_000)}m #{rem(div(ms, 1000), 60)}s"

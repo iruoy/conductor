@@ -270,7 +270,14 @@ defmodule ConductorWeb.RunLiveTest do
 
     # Once the result is in, it shows on the tool call, also after a reload.
     call = %{"type" => "toolCall", "id" => "t1", "name" => "bash", "arguments" => %{}}
-    result = %{"role" => "toolResult", "toolCallId" => "t1", "toolName" => "bash"}
+
+    result = %{
+      "role" => "toolResult",
+      "toolCallId" => "t1",
+      "toolName" => "bash",
+      "durationMs" => 1250
+    }
+
     result = Map.put(result, "content", [%{"type" => "text", "text" => "all green"}])
 
     for {id, kind, message} <- [
@@ -282,6 +289,7 @@ defmodule ConductorWeb.RunLiveTest do
     end
 
     assert has_element?(view, "#items-ev-4-e-1-0 [data-tool=bash]", "all green")
+    assert has_element?(view, "#tool-t1-duration[data-tool-duration]", "1.3s")
     refute has_element?(view, "#items-ev-4-e-2")
 
     # What the agent does between two texts is one group of steps, which says what goes on while it works.
@@ -355,6 +363,7 @@ defmodule ConductorWeb.RunLiveTest do
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
     assert has_element?(view, summary <> " [data-row-text]", "Thought, ran 2 commands")
     assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] [data-tool=bash]", "all green")
+    assert has_element?(view, "#tool-t1-duration[data-tool-duration]", "1.3s")
     refute has_element?(view, "#items-ev-4-e-2")
     refute has_element?(view, "#items-ev-4-e-4-0")
   end
