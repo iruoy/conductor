@@ -103,6 +103,7 @@ defmodule Conductor.MixProject do
         "deps.unlock --unused",
         "format",
         "ash.codegen --check",
+        "cmd node --test assets/js/tool_output_scroller.test.mjs",
         "test"
       ]
     ]

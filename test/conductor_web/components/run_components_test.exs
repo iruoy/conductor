@@ -30,6 +30,112 @@ defmodule ConductorWeb.RunComponentsTest do
     end
   end
 
+  describe "tool output scrolling" do
+    test "streaming and completed output keep the same pre id and hook without ignoring patches" do
+      for {output, state} <- [
+            {"first line", [streaming: true]},
+            {"first line\nsecond line", [streaming: true]},
+            {"first line\nsecond line\nfinished", [done: true, exit_code: 0]}
+          ] do
+        html =
+          render_component(
+            &tool/1,
+            [id: "live-tool-t1", name: "bash", output: output] ++ state
+          )
+
+        assert found?(
+                 html,
+                 "#live-tool-t1 > pre#live-tool-t1-output[data-tool-output][phx-hook='ToolOutputScroller']"
+               )
+
+        assert LazyHTML.text(find(html, "#live-tool-t1-output")) == output
+        assert Enum.count(find(html, "[phx-hook='ToolOutputScroller']")) == 1
+        refute found?(html, "#live-tool-t1[phx-update='ignore']")
+        refute found?(html, "#live-tool-t1 [phx-update='ignore']")
+      end
+    end
+
+    test "output remains server-rendered, cleaned and escaped when the hook is attached" do
+      html =
+        render_component(&tool/1,
+          id: "tool-escaped",
+          name: "bash",
+          output: "\e[32m<script>unsafe()</script>\e[0m\n{still plain text}",
+          streaming: true
+        )
+
+      assert LazyHTML.text(find(html, "#tool-escaped-output")) ==
+               "<script>unsafe()</script>\n{still plain text}"
+
+      refute found?(html, "#tool-escaped-output script")
+    end
+
+    test "separate transcript calls get distinct stable output ids" do
+      html =
+        show(
+          steps([
+            call("t1", "bash", %{"command" => "echo one"}, result("bash", "one")),
+            call("t2", "bash", %{"command" => "echo two"}, result("bash", "two"))
+          ])
+        )
+
+      for id <- ["tool-t1-output", "tool-t2-output"] do
+        assert found?(html, "pre##{id}[data-tool-output][phx-hook='ToolOutputScroller']")
+      end
+
+      assert Enum.count(find(html, "[phx-hook='ToolOutputScroller']")) == 2
+    end
+
+    test "a result without its call also has a stable output hook id" do
+      for output <- ["first", "first\nfinished"] do
+        html = show(%{id: "r", kind: "pi.tool-result", payload: result("bash", output)})
+
+        assert found?(
+                 html,
+                 "#r-tool-result > pre#r-tool-result-output[data-tool-output][phx-hook='ToolOutputScroller']"
+               )
+
+        assert LazyHTML.text(find(html, "#r-tool-result-output")) == output
+      end
+    end
+
+    test "only output is hooked, not multiline commands, written content or diffs" do
+      for attrs <- [
+            [name: "bash", args: %{"command" => "echo one\necho two"}, output: "one\ntwo"],
+            [name: "write", args: %{"content" => "contents"}, output: "ok"],
+            [name: "edit", diff: "-1 old\n+1 new", output: "ok"]
+          ] do
+        html = render_component(&tool/1, [id: "tool-scope"] ++ attrs)
+        refute found?(html, "#tool-scope pre:not([data-tool-output])[phx-hook]")
+
+        assert Enum.count(find(html, "[phx-hook='ToolOutputScroller']")) ==
+                 Enum.count(find(html, "pre[data-tool-output]"))
+      end
+    end
+
+    test "empty output does not mount a hook until the server renders its first text" do
+      html = render_component(&tool/1, id: "live-tool-empty", name: "bash", streaming: true)
+      refute found?(html, "#live-tool-empty-output")
+      refute found?(html, "[phx-hook='ToolOutputScroller']")
+
+      html =
+        render_component(&tool/1,
+          id: "live-tool-empty",
+          name: "bash",
+          streaming: true,
+          output: "first"
+        )
+
+      assert found?(html, "#live-tool-empty-output[phx-hook='ToolOutputScroller']")
+    end
+
+    test "anonymous component output is still rendered without an invalid id-less hook" do
+      html = render_component(&tool/1, name: "bash", output: "anonymous output")
+      assert text(html, "pre[data-tool-output]") == "anonymous output"
+      refute found?(html, "[phx-hook]:not([id])")
+    end
+  end
+
   describe "run_duration/2" do
     @start ~U[2026-10-08 12:00:00Z]
 
