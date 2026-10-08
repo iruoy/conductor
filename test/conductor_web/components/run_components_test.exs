@@ -172,14 +172,19 @@ defmodule ConductorWeb.RunComponentsTest do
     {[group], _} = transcript([assistant, result_item, next])
     html = show(group)
 
+    assert found?(html, "#context-details-#{group.id}:not([open]) > summary")
+    refute found?(html, "details[open]")
+
     for id <- [1, 2, 3] do
       assert found?(
                html,
-               "button[phx-click=inspect_context][phx-value-conversation='7'][phx-value-entry='#{id}']"
+               "#context-details-#{group.id} button[phx-click=inspect_context][phx-value-conversation='7'][phx-value-entry='#{id}']"
              )
     end
 
-    # Synthetic/live-only rows have no persisted entry to inspect.
+    # Synthetic/live-only rows have no persisted entry to inspect or details control.
+    refute found?(show(%{id: "live", kind: "text", text: "Streaming"}), "details")
+
     refute found?(
              show(%{id: "live", kind: "text", text: "Streaming"}),
              "button[phx-click=inspect_context]"
@@ -189,7 +194,12 @@ defmodule ConductorWeb.RunComponentsTest do
   test "reset and compaction entries can be inspected" do
     for kind <- ["pi.reset", "pi.compaction"] do
       html = show(item(8, %{"id" => 4, "kind" => kind}))
-      assert found?(html, "#inspect-ev-8-e-4-4[phx-value-conversation='8'][phx-value-entry='4']")
+      assert found?(html, "#context-details-ev-8-e-4:not([open]) > summary")
+
+      assert found?(
+               html,
+               "#context-details-ev-8-e-4 #inspect-ev-8-e-4-4[phx-value-conversation='8'][phx-value-entry='4']"
+             )
     end
   end
 
