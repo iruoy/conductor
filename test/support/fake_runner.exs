@@ -29,6 +29,31 @@ defmodule FakeRunner do
     end
   end
 
+  defp handle(%{"type" => "inspect_context"} = c, state) do
+    if c["entry"] == 999 do
+      error(c, "Unavailable", state)
+    else
+      text =
+        if c["offset"] == 0,
+          do: "<script>alert('unsafe')</script> reconstructed #{c["conversation"]}:#{c["entry"]}",
+          else: "second page"
+
+      ok(
+        c,
+        %{
+          conversation: c["conversation"],
+          entry: c["entry"],
+          text: text,
+          offset: c["offset"],
+          total: 16011,
+          next_offset: if(c["offset"] == 0, do: 16000, else: nil),
+          head: nil
+        },
+        state
+      )
+    end
+  end
+
   defp handle(%{"type" => "hello"} = c, state), do: ok(c, %{version: "fake", resumed: []}, state)
 
   defp handle(%{"type" => "models"} = c, state) do

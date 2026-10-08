@@ -83,13 +83,28 @@ defmodule ConductorWeb.RunComponents do
 
   @doc "Turns a persisted `Conductor.Runs.Event` into a transcript item."
   def item(%Conductor.Runs.Event{} = event) do
-    %{id: item_dom_id(event.conversation, event.entry), kind: event.kind, payload: event.payload}
+    %{
+      id: item_dom_id(event.conversation, event.entry),
+      kind: event.kind,
+      payload: event.payload,
+      context_entries: context_entry(event.conversation, event.payload)
+    }
   end
 
   @doc "Turns a live `message_end` entry into a transcript item."
   def item(conversation, %{"id" => id, "kind" => kind} = entry) do
-    %{id: item_dom_id(conversation, "e:#{id}"), kind: kind, payload: entry}
+    %{
+      id: item_dom_id(conversation, "e:#{id}"),
+      kind: kind,
+      payload: entry,
+      context_entries: context_entry(conversation, entry)
+    }
   end
+
+  defp context_entry(conversation, %{"id" => id, "kind" => kind}) when is_integer(id),
+    do: [%{conversation: conversation, entry: id, kind: kind}]
+
+  defp context_entry(_conversation, _payload), do: []
 
   @doc """
   What a list of transcript items shows: the agent's texts and, between them, what it did to get there. Its
@@ -159,7 +174,7 @@ defmodule ConductorWeb.RunComponents do
   The parts an item shows as. An assistant message falls apart into its texts and the groups of steps around
   them; anything else is its own part.
   """
-  def parts(%{kind: "pi.assistant", id: id, payload: payload}) do
+  def parts(%{kind: "pi.assistant", id: id, payload: payload} = item) do
     message = message(payload)
 
     parts =
@@ -182,11 +197,15 @@ defmodule ConductorWeb.RunComponents do
         []
       end
 
-    timing ++
-      case stop_notice(message) do
-        nil -> answer(parts, message)
-        notice -> parts ++ [%{id: "#{id}-error", kind: "error", text: notice}]
-      end
+    shown =
+      timing ++
+        case stop_notice(message) do
+          nil -> answer(parts, message)
+          notice -> parts ++ [%{id: "#{id}-error", kind: "error", text: notice}]
+        end
+
+    shown = if shown == [] and item[:context_entries] not in [nil, []], do: [item], else: shown
+    Enum.map(shown, &Map.put(&1, :context_entries, item[:context_entries] || []))
   end
 
   def parts(item), do: [item]
@@ -250,8 +269,14 @@ defmodule ConductorWeb.RunComponents do
   end
 
   @doc "Adds the steps of one group to another."
-  def add_steps(group, %{kind: "steps", steps: steps}),
-    do: %{group | steps: Enum.reduce(steps, group.steps, &add_step(&2, &1))}
+  def add_steps(group, %{kind: "steps", steps: steps} = part) do
+    group
+    |> Map.put(:steps, Enum.reduce(steps, group.steps, &add_step(&2, &1)))
+    |> Map.put(
+      :context_entries,
+      Enum.uniq((group[:context_entries] || []) ++ (part[:context_entries] || []))
+    )
+  end
 
   # Thinking that goes on is one thought.
   defp add_step(steps, %{type: :thinking, text: text} = step) do
@@ -292,7 +317,19 @@ defmodule ConductorWeb.RunComponents do
           step
       end)
 
-    %{group | steps: steps}
+    refs = group[:context_entries] || []
+    conversation = Enum.find_value(refs, & &1.conversation)
+
+    results_refs =
+      if conversation,
+        do:
+          Enum.flat_map(
+            Map.values(Map.take(results, call_ids(group))),
+            &context_entry(conversation, &1)
+          ),
+        else: []
+
+    group |> Map.put(:steps, steps) |> Map.put(:context_entries, Enum.uniq(refs ++ results_refs))
   end
 
   defp put_results(part, _results), do: part
@@ -863,19 +900,41 @@ defmodule ConductorWeb.RunComponents do
 
   attr :item, :map, required: true
 
-  def transcript_item(%{item: %{kind: "pi.user"}} = assigns) do
+  def transcript_item(assigns) do
+    assigns = assign(assigns, :context_entries, assigns.item[:context_entries] || [])
+
+    ~H"""
+    <.transcript_body item={@item} />
+    <div :if={@context_entries != []} class="flex flex-wrap justify-end gap-2">
+      <button
+        :for={ref <- @context_entries}
+        id={"inspect-#{@item.id}-#{ref.entry}"}
+        type="button"
+        phx-click="inspect_context"
+        phx-value-conversation={ref.conversation}
+        phx-value-entry={ref.entry}
+        class="rounded px-1 text-[10px] text-fg-tertiary transition-colors hover:bg-base-200 hover:text-base-content"
+        title="Inspect reconstructed model context through this persisted entry"
+      >
+        Context · {ref.kind} #{ref.entry}
+      </button>
+    </div>
+    """
+  end
+
+  defp transcript_body(%{item: %{kind: "pi.user"}} = assigns) do
     ~H"""
     <.chat_message from="input" text={message_text(@item.payload)} first={@item[:first] == true} />
     """
   end
 
-  def transcript_item(%{item: %{kind: "text"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "text"}} = assigns) do
     ~H"""
     <.chat_message from="agent" text={@item.text} />
     """
   end
 
-  def transcript_item(%{item: %{kind: "model-timing"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "model-timing"}} = assigns) do
     ~H"""
     <div
       id={@item.id}
@@ -889,7 +948,7 @@ defmodule ConductorWeb.RunComponents do
   end
 
   # A single step needs no group around it.
-  def transcript_item(%{item: %{kind: "steps", steps: [step]}} = assigns) do
+  defp transcript_body(%{item: %{kind: "steps", steps: [step]}} = assigns) do
     assigns = assign(assigns, :step, step)
 
     ~H"""
@@ -898,7 +957,7 @@ defmodule ConductorWeb.RunComponents do
   end
 
   # The group says what was done in it, or what is being done while the agent is at work there; it stays closed.
-  def transcript_item(%{item: %{kind: "steps"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "steps"}} = assigns) do
     %{steps: steps, active: active} = assigns.item
     running = active && Enum.find(Enum.reverse(steps), &(&1.type == :tool and &1.result == nil))
 
@@ -918,7 +977,7 @@ defmodule ConductorWeb.RunComponents do
     """
   end
 
-  def transcript_item(%{item: %{kind: "work"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "work"}} = assigns) do
     steps = for %{kind: "steps", steps: steps} <- assigns.item.parts, step <- steps, do: step
     assigns = assign(assigns, text: summary(steps), note: failed(steps))
 
@@ -931,13 +990,13 @@ defmodule ConductorWeb.RunComponents do
     """
   end
 
-  def transcript_item(%{item: %{kind: "error"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "error"}} = assigns) do
     ~H"""
     <div data-error class="text-xs text-chip-error-fg">{@item.text}</div>
     """
   end
 
-  def transcript_item(%{item: %{kind: "pi.tool-result"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "pi.tool-result"}} = assigns) do
     ~H"""
     <.tool
       name={"#{message(@item.payload)["toolName"]} result"}
@@ -951,7 +1010,7 @@ defmodule ConductorWeb.RunComponents do
   end
 
   # A note says what Conductor did; what it has to show for it (as the output of the setup) opens under the line.
-  def transcript_item(%{item: %{kind: "conductor.note"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "conductor.note"}} = assigns) do
     ~H"""
     <.rule :if={@item.payload["text"] in [nil, ""]} text={@item.payload["title"]} />
     <details :if={@item.payload["text"] not in [nil, ""]} data-note>
@@ -963,13 +1022,13 @@ defmodule ConductorWeb.RunComponents do
     """
   end
 
-  def transcript_item(%{item: %{kind: "pi.compaction"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "pi.compaction"}} = assigns) do
     ~H"""
     <.rule text="context compacted" />
     """
   end
 
-  def transcript_item(assigns) do
+  defp transcript_body(assigns) do
     ~H"""
     <div class="text-[11px] text-fg-tertiary">{@item.kind}</div>
     """

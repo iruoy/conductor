@@ -12,6 +12,7 @@ import {
 	type ConversationId,
 	configure,
 	type Extension,
+	type EntryId,
 	createRegistry,
 	Harness,
 	type SettledSubmissionRecord,
@@ -23,6 +24,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { agentChoice, answerText, createConductorExtensions, type GithubConfig, githubFromEnv } from "./agent.ts";
 import { probeDefaultLevel } from "./defaults.ts";
+import { contextPage, environmentSecrets } from "./context-inspection.ts";
 import { type GithubRun, type ModelMap, type RunRecord, RunsDoc, type Settled } from "./state.ts";
 
 export const VERSION = "0.1.0";
@@ -36,6 +38,7 @@ export type RunnerOptions = {
 	emit: (event: Event) => void;
 	github?: GithubConfig;
 	context?: Context;
+	inspectionSecrets?: () => readonly string[];
 };
 
 export class ProtocolError extends Error {}
@@ -47,6 +50,8 @@ export class Runner {
 	private conductor!: Extension;
 	private readonly emitEvent: (event: Event) => void;
 	private readonly models: Models;
+	private readonly inspectionSecrets: readonly string[];
+	private readonly inspectionSecretsCallback?: () => readonly string[];
 	private seq = 0;
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly tracking = new Set<string>();
@@ -58,6 +63,8 @@ export class Runner {
 	private constructor(options: RunnerOptions) {
 		this.models = options.models;
 		this.emitEvent = options.emit;
+		this.inspectionSecretsCallback = options.inspectionSecrets;
+		this.inspectionSecrets = [options.github?.token ?? githubFromEnv()?.token, ...environmentSecrets()].filter((v): v is string => Boolean(v));
 	}
 
 	static async open(options: RunnerOptions): Promise<Runner> {
@@ -114,6 +121,8 @@ export class Runner {
 				return this.abort(str(command, "run_id"));
 			case "sync":
 				return this.sync();
+			case "inspect_context":
+				return this.inspectContext(command);
 			default:
 				throw new ProtocolError(`unknown command ${command.type}`);
 		}
@@ -266,6 +275,27 @@ export class Runner {
 			if (run.status === "waiting_for_input") await this.settle(runId, { outcome: "failed", summary: "", error: "aborted" });
 			return { status: "aborting" };
 		});
+	}
+
+	/** A historical context read only: no fork, submit, configure or commit. All failures are intentionally generic. */
+	private async inspectContext(command: Command) {
+		try {
+			const run = await this.run(str(command, "run_id"));
+			const conversationId = command.conversation;
+			const entry = command.entry;
+			const offset = command.offset ?? 0;
+			if (!run || !positiveInteger(conversationId) || !positiveInteger(entry) ||
+				typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 ||
+				(run.conversationId !== conversationId && !Object.values(run.children).some((c) => c.conversationId === conversationId))) {
+				throw new Error("Invalid inspection");
+			}
+			const conversation = await this.harness.conversation(conversationId as ConversationId, ctx);
+			if (!conversation) throw new Error("Missing conversation");
+			const view = await conversation.context(ctx, { at: entry as EntryId });
+			return contextPage(view, conversationId, entry, offset, [...this.inspectionSecrets, ...environmentSecrets(), ...(this.inspectionSecretsCallback?.() ?? [])]);
+		} catch {
+			throw new ProtocolError("Unable to inspect context");
+		}
 	}
 
 	private async sync() {
@@ -448,6 +478,10 @@ export function parseVerdict(text: string): Pick<Settled, "outcome" | "error"> |
 /** The messages sent since a submission: submission ids only grow. */
 function messagesAfter(run: Readonly<RunRecord>, submissionId: number | null): number[] {
 	return (run.messages ?? []).filter((id) => submissionId !== null && id > submissionId);
+}
+
+function positiveInteger(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function str(command: Command, key: string): string {
