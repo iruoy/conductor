@@ -723,7 +723,9 @@ defmodule ConductorWeb.RunComponents do
         tabindex="0"
         role="group"
         aria-label={"#{@name} output"}
+        id={@id && "#{@id}-output"}
         data-tool-output
+        phx-hook={@id && "ToolOutputScroller"}
         class={[tool_pre(), wrap()]}
       >{@output}</pre>
     </div>
@@ -1057,6 +1059,7 @@ defmodule ConductorWeb.RunComponents do
   defp transcript_body(%{item: %{kind: "pi.tool-result"}} = assigns) do
     ~H"""
     <.tool
+      id={"#{@item.id}-tool-result"}
       name={"#{message(@item.payload)["toolName"]} result"}
       output={result_text(@item.payload)}
       error={result_error?(@item.payload)}
