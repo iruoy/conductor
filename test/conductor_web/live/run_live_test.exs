@@ -15,7 +15,7 @@ defmodule ConductorWeb.RunLiveTest do
     %{project: project}
   end
 
-  test "inspects head and subagent entries safely while the transcript keeps updating", %{
+  test "head and subagent transcripts omit context debug UI", %{
     conn: conn,
     project: project
   } do
@@ -42,53 +42,15 @@ defmodule ConductorWeb.RunLiveTest do
     ingest.(5, "sub:child", 2, "Child prompt")
     {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
 
-    assert has_element?(
-             view,
-             "#context-details-ev-4-e-1:not([open]) > summary",
-             "Context debug details"
-           )
-
-    assert has_element?(view, "#context-details-ev-4-e-1 #inspect-ev-4-e-1-1")
-    element(view, "#inspect-ev-4-e-1-1") |> render_click()
-    render_async(view, 5_000)
-    assert has_element?(view, "#context-content", "reconstructed 4:1")
-    refute has_element?(view, "#context-content script")
-    assert has_element?(view, "#tab-4[aria-selected=true]")
-
-    ingest.(4, "head", 3, "Continued while inspecting")
-
-    eventually(fn ->
-      assert has_element?(view, "#items-ev-4-e-3", "Continued while inspecting")
-    end)
-
-    assert has_element?(view, "#context-content", "reconstructed 4:1")
-    element(view, "#context-next") |> render_click()
-    render_async(view, 5_000)
-    assert has_element?(view, "#context-content", "second page")
-    element(view, "#context-close") |> render_click()
+    assert has_element?(view, "#items-ev-4-e-1")
+    refute has_element?(view, "[id^=context-details-]")
+    refute has_element?(view, "[phx-click=inspect_context]")
     refute has_element?(view, "#context-inspection")
-    assert has_element?(view, "#items-ev-4-e-3")
 
     element(view, "#tab-5") |> render_click()
-
-    assert has_element?(
-             view,
-             "#context-details-ev-5-e-2:not([open]) > summary",
-             "Context debug details"
-           )
-
-    assert has_element?(view, "#context-details-ev-5-e-2 #inspect-ev-5-e-2-2")
-    element(view, "#inspect-ev-5-e-2-2") |> render_click()
-    render_async(view, 5_000)
-    assert has_element?(view, "#context-content", "reconstructed 5:2")
-    assert has_element?(view, "#tab-5[aria-selected=true]")
-
-    render_click(view, "inspect_context", %{"conversation" => "5", "entry" => "999"})
-    render_async(view, 5_000)
-    assert has_element?(view, "#context-error")
-    refute has_element?(view, "#context-content")
-    element(view, "#context-close") |> render_click()
-    refute has_element?(view, "#context-inspection")
+    assert has_element?(view, "#items-ev-5-e-2")
+    refute has_element?(view, "[id^=context-details-]")
+    refute has_element?(view, "[phx-click=inspect_context]")
   end
 
   test "shows the transcript and sends answers to the runner", %{conn: conn, project: project} do
@@ -221,8 +183,9 @@ defmodule ConductorWeb.RunLiveTest do
            )
 
     assert has_element?(view, "#ev-4-e-2-timing", "gpt-6.1-sol · 1.5s")
-    assert has_element?(view, "#inspect-ev-4-e-2-response-3[phx-value-entry='3']")
-    assert has_element?(view, "#inspect-ev-4-e-2-response-5[phx-value-entry='5']")
+    refute has_element?(view, "[phx-click=inspect_context]")
+    refute has_element?(view, "[data-work] details details")
+    refute has_element?(view, "[data-work] [data-model-response].border")
 
     # Loading an unfinished turn must produce the same unique content.
     {:ok, loaded, _} = live(conn, ~p"/runs/#{run.id}")

@@ -954,34 +954,11 @@ defmodule ConductorWeb.RunComponents do
 
   attr :item, :map, required: true
 
-  def transcript_item(assigns) do
-    assigns = assign(assigns, :context_entries, assigns.item[:context_entries] || [])
+  attr :nested, :boolean, default: false
 
+  def transcript_item(assigns) do
     ~H"""
-    <.transcript_body item={@item} />
-    <details
-      :if={@context_entries != []}
-      id={"context-details-#{@item.id}"}
-      class="collapse text-xs text-fg-tertiary"
-    >
-      <summary class="collapse-title min-h-0 px-1 py-1 text-right transition-colors hover:text-base-content">
-        Context debug details
-      </summary>
-      <div class="collapse-content flex flex-wrap justify-end gap-2 px-1">
-        <button
-          :for={ref <- @context_entries}
-          id={"inspect-#{@item.id}-#{ref.entry}"}
-          type="button"
-          phx-click="inspect_context"
-          phx-value-conversation={ref.conversation}
-          phx-value-entry={ref.entry}
-          class="rounded px-1 text-xs transition-colors hover:bg-base-200 hover:text-base-content"
-          title="Inspect reconstructed model context through this persisted entry"
-        >
-          Inspect context · {ref.kind} #{ref.entry}
-        </button>
-      </div>
-    </details>
+    <.transcript_body item={@item} nested={@nested} />
     """
   end
 
@@ -999,22 +976,32 @@ defmodule ConductorWeb.RunComponents do
 
   defp transcript_body(%{item: %{kind: "response"}} = assigns) do
     ~H"""
-    <section data-model-response class="overflow-hidden rounded-md border border-base-300">
+    <section data-model-response class="space-y-1.5">
       <header
         id={String.replace_suffix(@item.id, "-response", "-timing")}
         data-model-duration
         title="Recorded model response time (not tool execution time)"
-        class="border-b border-base-300 bg-base-200/50 px-3 py-1.5 text-[11px] tabular-nums text-fg-tertiary"
+        class="px-1 py-1 text-[11px] tabular-nums text-fg-tertiary"
       >
         {@item.model} · {execution_duration(@item.ms)}
       </header>
-      <div data-response-content class="space-y-1.5 p-3">
+      <div data-response-content class="space-y-1.5">
         <.transcript_body
           :for={part <- @item.parts}
           item={if part.kind == "steps", do: %{part | active: @item.active}, else: part}
+          nested
         />
       </div>
     </section>
+    """
+  end
+
+  # An enclosing work group or response already provides the grouping.
+  defp transcript_body(%{item: %{kind: "steps"}, nested: true} = assigns) do
+    ~H"""
+    <div data-steps class="space-y-1.5">
+      <.step :for={step <- @item.steps} step={step} active={@item.active} />
+    </div>
     """
   end
 
@@ -1055,7 +1042,7 @@ defmodule ConductorWeb.RunComponents do
     ~H"""
     <.row text={@text} note={@note} meta={@item.ms && duration(@item.ms)}>
       <div data-work class="space-y-1.5">
-        <.transcript_item :for={part <- @item.parts} item={part} />
+        <.transcript_item :for={part <- @item.parts} item={part} nested />
       </div>
     </.row>
     """

@@ -135,83 +135,36 @@ defmodule ConductorWeb.RunComponentsTest do
     }
   end
 
-  test "context actions retain assistant and tool-result entries when steps are folded" do
-    assistant =
-      item(7, %{
-        "id" => 1,
-        "kind" => "pi.assistant",
-        "model" => [
-          %{
-            "role" => "assistant",
-            "content" => [
-              %{
-                "type" => "toolCall",
-                "id" => "t1",
-                "name" => "bash",
-                "arguments" => %{"command" => "ls"}
-              }
-            ]
-          }
-        ]
-      })
-
-    result_item = item(7, result("bash", "files"))
-
-    next =
-      item(7, %{
-        "id" => 3,
-        "kind" => "pi.assistant",
-        "model" => [
-          %{
-            "role" => "assistant",
-            "content" => [%{"type" => "thinking", "thinking" => "next step"}]
-          }
-        ]
-      })
-
-    {[group], _} = transcript([assistant, result_item, next])
-    html = show(group)
-
-    assert found?(
-             html,
-             "#context-details-#{group.id}.collapse:not([open]) > summary.collapse-title"
-           )
-
-    assert found?(html, "#context-details-#{group.id} > .collapse-content")
-    refute found?(html, "details[open]")
-
-    for id <- [1, 2, 3] do
-      assert found?(
-               html,
-               "#context-details-#{group.id} button[phx-click=inspect_context][phx-value-conversation='7'][phx-value-entry='#{id}']"
-             )
+  test "persisted transcript entries never expose context debug controls" do
+    for kind <- ["pi.user", "pi.reset", "pi.compaction"] do
+      html = show(item(8, %{"id" => 4, "kind" => kind}))
+      refute found?(html, "[id^=context-details-]")
+      refute found?(html, "button[phx-click=inspect_context]")
     end
-
-    # Synthetic/live-only rows have no persisted entry to inspect or details control.
-    refute found?(show(%{id: "live", kind: "text", text: "Streaming"}), "details")
-
-    refute found?(
-             show(%{id: "live", kind: "text", text: "Streaming"}),
-             "button[phx-click=inspect_context]"
-           )
   end
 
-  test "reset and compaction entries can be inspected" do
-    for kind <- ["pi.reset", "pi.compaction"] do
-      html = show(item(8, %{"id" => 4, "kind" => kind}))
+  test "work groups contain tool cards without nested response or step cards" do
+    group = steps([call("t1", "bash", %{}), call("t2", "read", %{})])
 
-      assert found?(
-               html,
-               "#context-details-ev-8-e-4.collapse:not([open]) > summary.collapse-title"
-             )
+    response = %{
+      id: "assistant-response",
+      kind: "response",
+      parts: [group],
+      model: "gpt-5.4",
+      ms: 1500,
+      active: false
+    }
 
-      assert found?(html, "#context-details-ev-8-e-4 > .collapse-content")
-
-      assert found?(
-               html,
-               "#context-details-ev-8-e-4 #inspect-ev-8-e-4-4[phx-value-conversation='8'][phx-value-entry='4']"
-             )
+    for part <- [group, response] do
+      html = show(%{id: "work", kind: "work", parts: [part], ms: 2000})
+      assert found?(html, "[data-work] [data-tool=bash]")
+      assert found?(html, "[data-work] [data-tool=read]")
+      refute found?(html, "[data-work] details details")
+      refute found?(html, "[data-work] [data-model-response].border")
+      refute found?(html, "[data-work] [data-response-content].p-3")
     end
+
+    assert found?(show(response), "#assistant-timing[data-model-duration]")
   end
 
   describe "recorded execution timings" do
