@@ -15,6 +15,7 @@ defmodule Conductor.Runs do
 
   resources do
     resource Run
+    resource Run.Version
     resource Question
     resource Event
   end
@@ -36,6 +37,71 @@ defmodule Conductor.Runs do
     |> Ash.read!()
   end
 
+  @status_groups %{
+    all: nil,
+    running: ~w(running provisioning handing_off)a,
+    waiting: ~w(waiting_for_input)a,
+    completed: ~w(completed)a,
+    failed: ~w(failed)a,
+    picked_up: ~w(picked_up)a
+  }
+
+  @doc "The filter groups of the runs list, in display order."
+  def status_groups, do: [:all, :running, :waiting, :completed, :failed, :picked_up]
+
+  @doc """
+  The newest runs in a status group (`:all` for every status) whose id or issue summary contains `text`,
+  case-insensitive.
+  """
+  def filter_runs(group \\ :all, text \\ "", limit \\ 200) do
+    Run
+    |> filter_query(group, text)
+    |> Ash.Query.sort(inserted_at: :desc, id: :desc)
+    |> Ash.Query.limit(limit)
+    |> Ash.Query.load(:project)
+    |> Ash.read!()
+  end
+
+  @doc "How many runs `filter_runs/3` matches, without the limit."
+  def count_runs(group \\ :all, text \\ ""), do: Run |> filter_query(group, text) |> Ash.count!()
+
+  @doc "The true number of runs per status group, as a map keyed by `status_groups/0`."
+  def group_counts, do: Map.new(status_groups(), &{&1, count_runs(&1)})
+
+  @doc "Whether a run belongs to the status group and matches the text, as `filter_runs/3` would say."
+  def matches?(%Run{} = run, group, text) do
+    needle = text |> String.trim() |> String.downcase()
+    summary = (run.issue_snapshot || %{})["summary"] || ""
+
+    group_statuses = Map.fetch!(@status_groups, group)
+
+    (is_nil(group_statuses) or run.status in group_statuses) and
+      (needle == "" or String.contains?(String.downcase(run.id), needle) or
+         String.contains?(String.downcase(to_string(summary)), needle))
+  end
+
+  defp filter_query(query, group, text) do
+    query =
+      case Map.fetch!(@status_groups, group) do
+        nil -> query
+        statuses -> Ash.Query.filter(query, status in ^statuses)
+      end
+
+    case String.trim(text) do
+      "" ->
+        query
+
+      text ->
+        pattern = "%" <> String.replace(String.downcase(text), ~r/[\\%_]/, "\\\\\\0") <> "%"
+
+        Ash.Query.filter(
+          query,
+          fragment("lower(?) like ?", id, ^pattern) or
+            fragment("lower(?->>'summary') like ?", issue_snapshot, ^pattern)
+        )
+    end
+  end
+
   def get_run(id), do: Ash.get!(Run, id, load: [project: :repo], not_found_error?: false)
   def get_run!(id), do: Ash.get!(Run, id, load: [project: :repo], not_found_error?: true)
 
@@ -50,6 +116,32 @@ defmodule Conductor.Runs do
   @doc "Runs that hold a concurrency slot. A run waiting for a human does not."
   def active_count do
     Run |> Ash.Query.filter(status in ^@active) |> Ash.count!()
+  end
+
+  @doc "Runs that wait for a human to answer."
+  def waiting_count do
+    Run |> Ash.Query.filter(status == :waiting_for_input) |> Ash.count!()
+  end
+
+  @doc "The other runs of the same issue as `run`, the first attempt first."
+  def other_attempts(%Run{id: id, issue_key: issue_key}) do
+    Run
+    |> Ash.Query.filter(issue_key == ^issue_key and id != ^id)
+    |> Ash.Query.sort(:attempt)
+    |> Ash.read!()
+  end
+
+  @doc """
+  The statuses a run has had, the first first, as `%{id: id, status: status, at: at}`. A run from before the
+  history was kept has none.
+  """
+  def status_history(run_id) do
+    Run.Version
+    |> Ash.Query.filter(version_source_id == ^run_id)
+    |> Ash.Query.sort([:version_inserted_at, :id])
+    |> Ash.Query.select([:id, :status, :version_inserted_at])
+    |> Ash.read!()
+    |> Enum.map(&%{id: &1.id, status: &1.status, at: &1.version_inserted_at})
   end
 
   def next_queued do
@@ -157,6 +249,77 @@ defmodule Conductor.Runs do
         select: {e.conversation, e.role}
     )
   end
+
+  @doc """
+  The model each conversation of the run ran on, as `%{conversation => %{"provider" => _, "modelId" => _}}` with
+  `"reasoning"` when the agent asked for a level. A conversation that has no answer yet is left out.
+  """
+  def conversation_models(run_id) do
+    # The runner stores the provider and model with every assistant message. This narrow Ecto query reads them
+    # from the first one of each conversation, without loading the transcript.
+    Repo.all(
+      from e in Event,
+        where: e.run_id == ^run_id and e.kind == "pi.assistant",
+        distinct: e.conversation,
+        order_by: [e.conversation, e.position, e.id],
+        select:
+          {e.conversation, fragment("? #>> '{model,0,provider}'", e.payload),
+           fragment("? #>> '{model,0,model}'", e.payload),
+           fragment("? #>> '{model,0,thinkingLevel}'", e.payload)}
+    )
+    |> Enum.flat_map(fn {conversation, provider, model, level} ->
+      case entry_model(%{"provider" => provider, "model" => model, "thinkingLevel" => level}) do
+        nil -> []
+        choice -> [{conversation, choice}]
+      end
+    end)
+    |> Map.new()
+  end
+
+  @doc """
+  How each conversation of the run last left off, as `%{conversation => :working | :ended | :error}`, read from its
+  last entry without loading the transcript. See `conversation_end/2`.
+  """
+  def conversation_ends(run_id) do
+    Repo.all(
+      from e in Event,
+        where: e.run_id == ^run_id and e.kind != "pi.system",
+        distinct: e.conversation,
+        order_by: [e.conversation, desc: e.id],
+        select: {e.conversation, e.kind, fragment("? #>> '{model,0,stopReason}'", e.payload)}
+    )
+    |> Map.new(fn {conversation, kind, stop} -> {conversation, conversation_end(kind, stop)} end)
+  end
+
+  @doc """
+  What an entry of a conversation says about it: `:error` when the agent's answer stopped on an error, `:working`
+  when the agent has something to do next (it was told something, got a tool result, started a call, or stopped to
+  call a tool), and `:ended` otherwise.
+  """
+  def conversation_end("pi.assistant", "error"), do: :error
+  def conversation_end("pi.assistant", "toolUse"), do: :working
+  def conversation_end("pi.assistant", _stop), do: :ended
+
+  def conversation_end(kind, _stop) when kind in ~w(pi.user pi.tool-result tool_start),
+    do: :working
+
+  def conversation_end(_kind, _stop), do: :ended
+
+  @doc """
+  The model an assistant message names, in the shape of a model choice (`"provider"`, `"modelId"`, and
+  `"reasoning"` when a level was asked for); `nil` when it names none.
+  """
+  def entry_model(%{"provider" => provider, "model" => model} = message)
+      when is_binary(provider) and is_binary(model) do
+    choice = %{"provider" => provider, "modelId" => model}
+
+    case message["thinkingLevel"] do
+      level when is_binary(level) and level != "" -> Map.put(choice, "reasoning", level)
+      _ -> choice
+    end
+  end
+
+  def entry_model(_message), do: nil
 
   @doc "Adds a note from Conductor itself (such as setup output) to the run's transcript, as conversation 0."
   def record_note(run_id, key, payload) do

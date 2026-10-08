@@ -47,6 +47,12 @@ defmodule Conductor.CoordinatorTest do
 
     run = Runs.get_run!("shop-4-1")
     assert run.branch == "feature/4"
+
+    # The run keeps the models it was started with, whatever the settings say later.
+    choice = %{"provider" => "faux", "modelId" => "faux-1"}
+    assert run.models == Map.new(~w(head low medium high), &{&1, choice})
+    settings_fixture(%{models: %{"head" => %{"provider" => "faux", "modelId" => "faux-2"}}})
+    assert Runs.get_run!("shop-4-1").models["head"] == choice
     assert git!(run.workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"]) == "feature/4"
   end
 

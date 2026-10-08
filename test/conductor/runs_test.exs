@@ -1,6 +1,7 @@
 defmodule Conductor.RunsTest do
   use Conductor.DataCase, async: false
   import Conductor.Fixtures
+  require Ash.Query
   alias Conductor.Runs
 
   test "messages, tool starts and notes are ordered by conversation, position and id" do
@@ -121,6 +122,7 @@ defmodule Conductor.RunsTest do
 
     assert Ash.Domain.Info.resources(Runs) == [
              Conductor.Runs.Run,
+             Conductor.Runs.Run.Version,
              Conductor.Runs.Question,
              Conductor.Runs.Event
            ]
@@ -171,6 +173,19 @@ defmodule Conductor.RunsTest do
     assert [queued] = Runs.list_by_status([:picked_up])
     assert queued.id == second.id
     assert queued.project.repo.id == project.repo.id
+  end
+
+  test "other_attempts lists the other runs of the same issue, the first attempt first" do
+    project = project_fixture()
+    first = run_fixture(project, "SHOP-1", %{status: :failed})
+    second = run_fixture(project, "SHOP-1", %{status: :failed})
+    third = run_fixture(project, "SHOP-1", %{status: :running})
+    run_fixture(project, "SHOP-2")
+
+    assert Enum.map(Runs.other_attempts(second), &{&1.id, &1.status}) ==
+             [{first.id, :failed}, {third.id, :running}]
+
+    assert Runs.other_attempts(run_fixture(project, "SHOP-3")) == []
   end
 
   test "queue priority, active slots and pruning preserve selection rules" do
@@ -301,6 +316,191 @@ defmodule Conductor.RunsTest do
     assert :ok = Runs.ingest(%{event | "run_id" => "missing"})
     assert Runs.get_run!(run.id).error == failed.error
     refute_received {:run_updated, _}
+  end
+
+  describe "status_history/1" do
+    test "keeps every status of a run through its lifecycle, in order and with its time" do
+      project = project_fixture()
+      {:ok, run} = Runs.create_run(project, "SHOP-30", snapshot("SHOP-30"))
+      assert [%{status: :picked_up, at: %DateTime{}}] = Runs.status_history(run.id)
+
+      {:ok, run} = Runs.pump(run)
+      {:ok, run} = Runs.provision_end(run)
+      state = %{"type" => "run_state", "run_id" => run.id, "status" => "waiting_for_input"}
+      assert :ok = Runs.ingest(state)
+      assert :ok = Runs.ingest(%{state | "status" => "running"})
+      {:ok, run} = Runs.settle(Runs.get_run!(run.id), %{outcome: "completed", summary: "Done"})
+      {:ok, run} = Runs.complete(run, %{pr_url: "https://github.com/acme/shop/pull/7"})
+
+      history = Runs.status_history(run.id)
+
+      assert Enum.map(history, & &1.status) ==
+               ~w(picked_up provisioning running waiting_for_input running handing_off completed)a
+
+      times = Enum.map(history, & &1.at)
+      assert times == Enum.sort(times, DateTime)
+      assert history |> Enum.map(& &1.id) |> Enum.uniq() |> length() == 7
+    end
+
+    test "every way to fail is kept" do
+      project = project_fixture()
+
+      for {key, from, action} <- [
+            {"SHOP-31", :picked_up, :abort},
+            {"SHOP-32", :running, :fail},
+            {"SHOP-33", :handing_off, :hand_off_failed}
+          ] do
+        run = run_fixture(project, key, %{status: from})
+        {:ok, _failed} = apply(Runs, action, [run])
+        assert %{status: :failed} = List.last(Runs.status_history(run.id))
+      end
+    end
+
+    test "only a change of status adds to it" do
+      project = project_fixture()
+      run = run_fixture(project, "SHOP-34", %{status: :running, workspace_path: "/tmp/ws"})
+      other = run_fixture(project, "SHOP-35")
+      {:ok, run} = Runs.set_branch(run, %{branch: "conductor/shop-34"})
+      {:ok, run} = Runs.clear_workspace(run)
+
+      # Neither a transition that is refused, nor a state the run is already in.
+      assert {:error, %Ash.Error.Invalid{}} = Runs.complete(run)
+
+      assert :ok =
+               Runs.ingest(%{"type" => "run_state", "run_id" => run.id, "status" => "running"})
+
+      assert Enum.map(Runs.status_history(run.id), & &1.status) ==
+               ~w(picked_up provisioning running)a
+
+      assert Enum.map(Runs.status_history(other.id), & &1.status) == [:picked_up]
+      assert Runs.status_history("missing") == []
+    end
+
+    test "a version holds the status and the action, and no copy of the run" do
+      models = %{"head" => %{"provider" => "faux", "modelId" => "faux-1"}}
+      run = run_fixture(project_fixture(), "SHOP-36", %{status: :running, models: models})
+      assert Runs.get_run!(run.id).models == models
+
+      {:ok, _settled} =
+        Runs.settle(run, %{outcome: "failed", summary: "No", error: "Tests failed"})
+
+      versions =
+        Conductor.Runs.Run.Version
+        |> Ash.Query.filter(version_source_id == ^run.id)
+        |> Ash.Query.sort([:version_inserted_at, :id])
+        |> Ash.read!()
+
+      assert Enum.map(versions, &{&1.version_action_name, &1.status, &1.changes}) == [
+               {:create, :picked_up, %{}},
+               {:pump, :provisioning, %{}},
+               {:provision_end, :running, %{}},
+               {:settle, :handing_off, %{}}
+             ]
+    end
+
+    test "a bulk update of the status is kept too" do
+      project = project_fixture()
+      runs = for key <- ~w(SHOP-37 SHOP-38), do: run_fixture(project, key, %{status: :running})
+      ids = Enum.map(runs, & &1.id)
+
+      result =
+        Conductor.Runs.Run
+        |> Ash.Query.filter(id in ^ids)
+        |> Ash.bulk_update(:fail, %{error: "stopped"}, strategy: [:atomic, :atomic_batches])
+
+      assert result.status == :success
+
+      for id <- ids do
+        assert Runs.get_run!(id).status == :failed
+        assert %{status: :failed} = List.last(Runs.status_history(id))
+        assert length(Runs.status_history(id)) == 4
+      end
+    end
+  end
+
+  test "conversation_models/1 reads each conversation's model from its first answer" do
+    run = run_fixture(project_fixture(), "SHOP-60")
+    other = run_fixture(project_fixture(), "SHOP-61")
+
+    answer = fn run, conversation, role, id, message ->
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => role,
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{"id" => id, "kind" => "pi.assistant", "model" => [message]}
+        }
+      })
+    end
+
+    faux = %{"role" => "assistant", "provider" => "faux", "model" => "faux-1"}
+    answer.(run, 1, "head", 2, Map.put(faux, "thinkingLevel", "high"))
+    answer.(run, 1, "head", 5, %{faux | "model" => "faux-later"})
+    answer.(run, 2, "sub:#7", 3, %{faux | "model" => "faux-small"})
+    # An answer that names no model, as nothing the runner sends does.
+    answer.(run, 3, "sub:#8", 4, %{"role" => "assistant"})
+    answer.(other, 1, "head", 2, %{faux | "model" => "faux-other"})
+
+    assert Runs.conversation_models(run.id) == %{
+             1 => %{"provider" => "faux", "modelId" => "faux-1", "reasoning" => "high"},
+             2 => %{"provider" => "faux", "modelId" => "faux-small"}
+           }
+
+    assert Runs.conversation_models("missing") == %{}
+  end
+
+  describe "filter_runs/3" do
+    setup do
+      project = project_fixture(%{repo: repo_fixture()})
+      run_fixture(project, "shop-1", %{status: :running})
+      run_fixture(project, "shop-2", %{status: :provisioning})
+      run_fixture(project, "shop-3", %{status: :failed, error: "boom"})
+
+      run_fixture(project, "shop-4", %{
+        status: :completed,
+        issue_snapshot: snapshot("shop-4", "Reset 100% of the Cache_keys")
+      })
+
+      :ok
+    end
+
+    test "filters by status group and counts the whole group" do
+      assert ["shop-2-1", "shop-1-1"] = Enum.map(Runs.filter_runs(:running), & &1.id)
+      assert [%{id: "shop-3-1"}] = Runs.filter_runs(:failed)
+      assert length(Runs.filter_runs(:all)) == 4
+
+      assert %{all: 4, running: 2, failed: 1, completed: 1, waiting: 0, picked_up: 0} =
+               Runs.group_counts()
+
+      assert Runs.count_runs(:running) == 2
+      assert length(Runs.filter_runs(:all, "", 1)) == 1
+      assert Runs.count_runs(:all) == 4
+    end
+
+    test "matches id and summary case-insensitively, taking wildcards literally" do
+      assert [%{id: "shop-3-1"}] = Runs.filter_runs(:all, "SHOP-3")
+      assert [%{id: "shop-4-1"}] = Runs.filter_runs(:all, "cache_KEYS")
+      assert [%{id: "shop-4-1"}] = Runs.filter_runs(:all, "100%")
+      assert [] = Runs.filter_runs(:all, "cache%keys")
+      assert [] = Runs.filter_runs(:failed, "cache")
+      assert Runs.count_runs(:all, "fix the thing") == 3
+    end
+
+    test "matches?/3 agrees with the query" do
+      for group <- Runs.status_groups(), text <- ["", "shop-3", "CACHE_keys", "nope"] do
+        expected = Runs.filter_runs(group, text) |> Enum.map(& &1.id) |> Enum.sort()
+
+        actual =
+          Runs.filter_runs(:all)
+          |> Enum.filter(&Runs.matches?(&1, group, text))
+          |> Enum.map(& &1.id)
+          |> Enum.sort()
+
+        assert actual == expected
+      end
+    end
   end
 
   defp ingest(run, event) do

@@ -3,11 +3,14 @@ defmodule Conductor.Runs.Run do
   One attempt at one issue, with id `<issue key>-<attempt>` (`shop-12-1`).
 
   Status: `picked_up → provisioning → running ⇄ waiting_for_input → handing_off → completed | failed`.
+
+  Every status the run gets is kept with its time in `Conductor.Runs.Run.Version` (table `runs_versions`), written
+  by `AshPaperTrail` in the transaction of the action that sets it; read it with `Conductor.Runs.status_history/1`.
   """
   use Ash.Resource,
     domain: Conductor.Runs,
     data_layer: AshPostgres.DataLayer,
-    extensions: [AshStateMachine],
+    extensions: [AshStateMachine, AshPaperTrail.Resource],
     notifiers: [Conductor.Runs.Notifier]
 
   @terminal ~w(completed failed)a
@@ -63,6 +66,47 @@ defmodule Conductor.Runs.Run do
     end
   end
 
+  # A version is the status a run got and when, nothing else: the status is a column of its own, and every
+  # attribute is left out of `changes`, so that the issue snapshot, summary and error are not copied on each
+  # change. Only the create and the state transitions write one; an attribute added to the run goes in
+  # `ignore_attributes` too.
+  paper_trail do
+    primary_key_type :uuid_v7
+    change_tracking_mode :changes_only
+    attributes_as_attributes [:status]
+    store_action_name? true
+    mixin Conductor.Runs.RunVersion
+
+    ignore_attributes [
+      :status,
+      :issue_key,
+      :attempt,
+      :issue_snapshot,
+      :workspace_path,
+      :branch,
+      :outcome,
+      :summary,
+      :error,
+      :pr_url,
+      :models,
+      :project_id,
+      :inserted_at,
+      :updated_at
+    ]
+
+    on_actions [
+      :pump,
+      :provision_end,
+      :wait_for_input,
+      :resume,
+      :settle,
+      :complete,
+      :hand_off_failed,
+      :abort,
+      :fail
+    ]
+  end
+
   actions do
     defaults [:read]
 
@@ -90,7 +134,7 @@ defmodule Conductor.Runs.Run do
     end
 
     update :provision_end do
-      accept []
+      accept [:models]
       change transition_state(:running)
     end
 
@@ -155,6 +199,10 @@ defmodule Conductor.Runs.Run do
     attribute :summary, :string, public?: true, constraints: [trim?: false]
     attribute :error, :string, public?: true, constraints: [trim?: false]
     attribute :pr_url, :string, public?: true, constraints: [trim?: false]
+
+    # The model choices the runner got in `start_run`, by role (`head`, `low`, `medium`, `high`), each
+    # `%{"provider" => _, "modelId" => _, "reasoning" => _}`. A run from before they were kept has none.
+    attribute :models, :map, public?: true
     create_timestamp :inserted_at, type: :utc_datetime
     update_timestamp :updated_at, type: :utc_datetime
   end

@@ -1,5 +1,7 @@
 // The protocol core: commands from Phoenix in, replies and events out. Everything a restart needs lives in the
 // pi-durable session (conversations, tasks, and RunsDoc), so `open()` on the same storage picks every run up again.
+// Phoenix takes the model a conversation ran on (a subagent's is picked by its task's complexity) from the `provider`,
+// `model` and `thinkingLevel` of the assistant messages in its `agent_event`s; nothing else reports it.
 import { isAbsolute } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";

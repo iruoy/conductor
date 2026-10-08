@@ -124,18 +124,66 @@ defmodule ConductorWeb.RunLiveTest do
     send_entry.(4, "pi.assistant", stop)
 
     folded = "#items-ev-4-e-2-0-work > details:not([open])"
-    assert has_element?(view, folded <> " > summary", "Worked for 2m 5s · 1 steps")
+    assert has_element?(view, folded <> " > summary [data-row-text]", "Ran 1 command")
+    assert has_element?(view, folded <> " > summary [data-row-meta]", "2m 5s")
     assert has_element?(view, folded <> " [data-work] [data-from=agent]", "Looking around.")
-    assert has_element?(view, folded <> " [data-work] details", "a.ex")
+    assert has_element?(view, folded <> " [data-work] [data-tool=bash]", "a.ex")
     refute has_element?(view, "#items-ev-4-e-2-0")
     refute has_element?(view, "#items-ev-4-e-2-1")
     assert has_element?(view, "#items-ev-4-e-4-0 [data-from=agent]", "It is there.")
 
     # The same shows after a reload.
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-    assert has_element?(view, folded <> " > summary", "Worked for 2m 5s")
+    assert has_element?(view, folded <> " > summary [data-row-meta]", "2m 5s")
     assert has_element?(view, folded <> " [data-work] [data-from=agent]", "Looking around.")
     assert has_element?(view, "#items-ev-4-e-4-0 [data-from=agent]", "It is there.")
+  end
+
+  test "shows the first prompt that arrives while the page is open as the issue", %{
+    conn: conn,
+    project: project
+  } do
+    run = run_fixture(project, "shop-15", %{status: :running})
+    {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+    prompt = fn conversation, id, text ->
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => if(conversation == 4, do: "head", else: "sub:#16"),
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{
+            "id" => id,
+            "kind" => "pi.user",
+            "model" => [%{"role" => "user", "content" => text}]
+          }
+        }
+      })
+    end
+
+    prompt.(4, 1, "The issue")
+    prompt.(4, 2, "Use tabs")
+
+    eventually(fn -> assert has_element?(view, "#items-ev-4-e-2") end)
+    assert has_element?(view, "#items-ev-4-e-1 [data-badge]", "IS")
+    assert has_element?(view, "#items-ev-4-e-1 [data-label]", "Issue")
+    assert has_element?(view, "#items-ev-4-e-2 [data-badge]", "YOU")
+    assert has_element?(view, "#items-ev-4-e-2 [data-label]", "You")
+
+    # Another conversation starts with a first prompt of its own, also when it is opened before it has one.
+    prompt.(5, 1, "The subtask")
+    eventually(fn -> assert has_element?(view, "#tab-5") end)
+    view |> element("#tab-5") |> render_click()
+    assert has_element?(view, "#items-ev-5-e-1 [data-label]", "Issue")
+    prompt.(5, 2, "Go on")
+    eventually(fn -> assert has_element?(view, "#items-ev-5-e-2 [data-label]", "You") end)
+
+    # A page that loads the transcript marks the same one.
+    view |> element("#tab-4") |> render_click()
+    assert has_element?(view, "#items-ev-4-e-1 [data-label]", "Issue")
+    assert has_element?(view, "#items-ev-4-e-2 [data-label]", "You")
   end
 
   test "streams live text and tool output", %{conn: conn, project: project} do
@@ -157,13 +205,13 @@ defmodule ConductorWeb.RunLiveTest do
     # Nothing has come in yet: the agent is at work.
     assert has_element?(view, "#indicator .loading")
 
-    # Thinking is open and shimmers for as long as it streams, and closes when the text starts.
+    # Thinking shows as it streams in, and becomes a closed line when the text starts.
     send_event.(%{
       "type" => "message_update",
       "changes" => [%{"type" => "thinking_delta", "delta" => "Let me see"}]
     })
 
-    assert has_element?(view, "details#live-thinking[open] .skeleton-text", "Thinking…")
+    assert has_element?(view, "#live-thinking[data-thinking]", "Thinking")
     assert has_element?(view, "#live-thinking", "Let me see")
     refute has_element?(view, "#indicator")
 
@@ -211,7 +259,12 @@ defmodule ConductorWeb.RunLiveTest do
       "output" => %{"set" => "3 tests, 0 failures"}
     })
 
-    assert has_element?(view, "details#live-tool-t1[open] .skeleton-text", "bash")
+    assert has_element?(
+             view,
+             "#live-tool-t1[data-tool=bash] [data-tool-status=running]",
+             "running"
+           )
+
     assert has_element?(view, "#live-tool-t1", "3 tests, 0 failures")
     assert has_element?(view, "#tab-4", "head")
 
@@ -228,7 +281,7 @@ defmodule ConductorWeb.RunLiveTest do
       send_event.(%{"type" => "message_end", "entry" => entry})
     end
 
-    assert has_element?(view, "#items-ev-4-e-1-0 details", "all green")
+    assert has_element?(view, "#items-ev-4-e-1-0 [data-tool=bash]", "all green")
     refute has_element?(view, "#items-ev-4-e-2")
 
     # What the agent does between two texts is one group of steps, which says what goes on while it works.
@@ -238,18 +291,19 @@ defmodule ConductorWeb.RunLiveTest do
     entry = %{"id" => 4, "kind" => "pi.assistant", "model" => [message]}
     send_event.(%{"type" => "message_end", "entry" => entry})
 
-    assert has_element?(view, "#items-ev-4-e-1-0 > details:not([open]) > summary", "3 steps")
+    summary = "#items-ev-4-e-1-0 > details:not([open]) > summary"
+    assert has_element?(view, summary <> " [data-row-text]", "Running commands")
+    assert has_element?(view, summary <> " > [data-pulse]")
 
-    assert has_element?(
-             view,
-             "#items-ev-4-e-1-0 > details > summary .skeleton-text",
-             "Running commands"
-           )
-
-    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] details", "all green")
+    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] [data-tool=bash]", "all green")
     assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] details", "So it works.")
     # The call without a result is the one that runs.
-    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] .skeleton-text", "bash")
+    assert has_element?(
+             view,
+             "#items-ev-4-e-1-0 [data-steps] [data-tool-status=running]",
+             "running"
+           )
+
     refute has_element?(view, "#items-ev-4-e-4-0")
 
     # The agent goes on after a tool result, until a message that calls no tool; that closes the group.
@@ -258,8 +312,8 @@ defmodule ConductorWeb.RunLiveTest do
     done = %{"content" => [%{"type" => "text", "text" => "Done."}], "stopReason" => "stop"}
     entry = %{"id" => 5, "kind" => "pi.assistant", "model" => [done]}
     send_event.(%{"type" => "message_end", "entry" => entry})
-    assert has_element?(view, "#items-ev-4-e-1-0 > details > summary", "Ran commands")
-    refute has_element?(view, "#items-ev-4-e-1-0 > details > summary .skeleton-text")
+    assert has_element?(view, summary <> " [data-row-text]", "Thought, ran 2 commands")
+    refute has_element?(view, summary <> " > [data-pulse]")
 
     assert has_element?(
              view,
@@ -280,7 +334,7 @@ defmodule ConductorWeb.RunLiveTest do
     entry = %{"id" => 7, "kind" => "pi.tool-result", "model" => [result]}
     send_event.(%{"type" => "message_end", "entry" => entry})
 
-    assert has_element?(view, "#items-ev-4-e-6-0 summary", "lib/a.ex")
+    assert has_element?(view, "#items-ev-4-e-6-0 [data-tool=edit] [data-tool-call]", "lib/a.ex")
     # Each line has its number in the old file and in the new one.
     lines =
       view
@@ -299,9 +353,472 @@ defmodule ConductorWeb.RunLiveTest do
 
     # The same shows after a reload.
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-    assert has_element?(view, "#items-ev-4-e-1-0 > details:not([open]) > summary", "3 steps")
-    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] details", "all green")
+    assert has_element?(view, summary <> " [data-row-text]", "Thought, ran 2 commands")
+    assert has_element?(view, "#items-ev-4-e-1-0 [data-steps] [data-tool=bash]", "all green")
     refute has_element?(view, "#items-ev-4-e-2")
     refute has_element?(view, "#items-ev-4-e-4-0")
+  end
+
+  describe "page frame" do
+    test "a running run: breadcrumb, status line, actions and details", %{
+      conn: conn,
+      project: project
+    } do
+      run =
+        run_fixture(project, "shop-5", %{
+          status: :running,
+          branch: "conductor/shop-5",
+          workspace_path: "/tmp/ws/shop-5",
+          issue_snapshot:
+            snapshot("shop-5", "Add a limit", %{"url" => "https://github.com/acme/shop/issues/5"})
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#run #run-header a#run-back[href='/']", "Runs")
+      assert has_element?(view, "h1#run-title #run-id", "shop-5-1")
+      assert has_element?(view, "h1#run-title #run-summary", "Add a limit")
+      assert has_element?(view, "#run-status[data-status=running]")
+      assert has_element?(view, "#run-branch", "conductor/shop-5")
+      assert has_element?(view, "#run-started", "started")
+
+      assert has_element?(
+               view,
+               "a#open-issue[href='https://github.com/acme/shop/issues/5'][target=_blank]"
+             )
+
+      assert has_element?(view, "#abort")
+      assert has_element?(view, "dialog#confirm-abort")
+      refute has_element?(view, "#retry")
+      refute has_element?(view, "#run-error")
+
+      assert has_element?(view, "#run-sidebar dl#run-details #run-project", "acme/1")
+      assert has_element?(view, "#run-repository", project.repo.name)
+      assert has_element?(view, "#run-pr", "Not opened yet")
+      refute has_element?(view, "#run-pr-link")
+      assert has_element?(view, "#run-attempt", "1")
+      refute has_element?(view, "#run-attempts a")
+      assert has_element?(view, "#run-workspace", "/tmp/ws/shop-5")
+
+      # The transcript scrolls in its own frame, with the prompt under it.
+      assert has_element?(view, "#run #transcript-scroller[phx-hook] #transcript")
+      assert has_element?(view, "#run #prompt-bar form#prompt")
+    end
+
+    test "a waiting run: the warning chip, and the question in the bar at the bottom", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-6", %{status: :waiting_for_input})
+      {:ok, _question} = Runs.upsert_question(run.id, "q1", "Which way?")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#run-status[data-status=waiting_for_input]")
+      assert has_element?(view, "#abort")
+      refute has_element?(view, "#retry")
+      # The snapshot has no link to the issue, and the workspace is not there yet.
+      refute has_element?(view, "#open-issue")
+      assert has_element?(view, "#run-workspace", "Not created yet")
+      assert has_element?(view, "#prompt-bar form#answer-q1 #question-q1", "Which way?")
+    end
+
+    test "the question is the label of the answer field, and the answer is sent", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-61", %{status: :waiting_for_input})
+      {:ok, _} = Runs.upsert_question(run.id, "q1", "Which way?")
+      {:ok, _} = Runs.upsert_question(run.id, "q2", "And then?")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#prompt-bar.bg-row-waiting")
+      assert has_element?(view, "#question-q1", "The agent asks")
+      assert has_element?(view, "#questions-more", "1 more after this")
+      assert has_element?(view, "#answer-q1 label[for=answer-q1-text]", "Which way?")
+      assert has_element?(view, "#answer-q1 textarea#answer-q1-text[placeholder='Your answer']")
+      assert has_element?(view, "#answer-q1 button[type=submit]", "Answer")
+      refute has_element?(view, "#prompt")
+
+      # The form still submits the answer event (the answer itself is covered by the first test).
+      assert view |> form("#answer-q1", %{"text" => "left"}) |> render_submit()
+    end
+
+    test "the message field has a label, a hint and a Send button", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-62", %{status: :running})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#prompt-bar.bg-base-100")
+      assert has_element?(view, "#prompt label[for=prompt-text]", "Message the head agent")
+      assert has_element?(view, "#prompt textarea#prompt-text:not([disabled])")
+      assert has_element?(view, "#prompt button[type=submit]", "Send")
+      assert has_element?(view, "#prompt-hint", "Waits in the agent's inbox")
+      assert has_element?(view, "#prompt-stop")
+    end
+
+    test "the message field is disabled until the run is running", %{conn: conn, project: project} do
+      run = run_fixture(project, "shop-63", %{status: :picked_up})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#prompt textarea[disabled]")
+      assert has_element?(view, "#prompt-stop")
+      refute has_element?(view, "#prompt-submit")
+    end
+
+    test "a failed run: the error banner, Retry, the pull request and the other attempts", %{
+      conn: conn,
+      project: project
+    } do
+      first = run_fixture(project, "shop-7", %{status: :failed, error: "boom"})
+
+      second =
+        run_fixture(project, "shop-7", %{status: :failed, error: "Tests failed.\nexit 2"})
+
+      other_issue = run_fixture(project, "shop-8", %{status: :failed, error: "boom"})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{second.id}")
+
+      assert has_element?(view, "#run-status[data-status=failed]")
+      assert has_element?(view, "#run-error[role=alert]")
+      # Line breaks are kept.
+      assert view |> element("#run-error-text") |> render() =~ "Tests failed.\nexit 2"
+      assert has_element?(view, "#retry")
+      refute has_element?(view, "#abort")
+      refute has_element?(view, "#confirm-abort")
+      refute has_element?(view, "#prompt-bar")
+      assert has_element?(view, "#run-workspace", "Removed")
+
+      assert has_element?(view, "#run-attempt", "2")
+
+      assert has_element?(
+               view,
+               "#run-attempts #attempt-#{first.id} a[href='/runs/#{first.id}']",
+               first.id
+             )
+
+      assert has_element?(view, "#attempt-#{first.id} [data-status=failed]", "failed")
+      refute has_element?(view, "#attempt-#{second.id}")
+      refute has_element?(view, "#attempt-#{other_issue.id}")
+
+      # A retry is another attempt, listed as soon as it is there.
+      {:ok, third} = Runs.create_run(project, "shop-7", snapshot("shop-7"))
+
+      eventually(fn ->
+        assert has_element?(view, "#attempt-#{third.id} [data-status=picked_up]")
+      end)
+    end
+
+    test "a completed run links its pull request from the details and offers no retry", %{
+      conn: conn,
+      project: project
+    } do
+      run =
+        run_fixture(project, "shop-9", %{
+          status: :completed,
+          pr_url: "https://github.com/acme/shop/pull/221"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(
+               view,
+               "#run-pr a#run-pr-link[href='https://github.com/acme/shop/pull/221'][target=_blank]",
+               "#221"
+             )
+
+      refute has_element?(view, "#run-header a[href*='/pull/']")
+      refute has_element?(view, "#retry")
+      refute has_element?(view, "#abort")
+    end
+  end
+
+  describe "models" do
+    defp answer(run, conversation, role, id, model) do
+      message = %{
+        "role" => "assistant",
+        "provider" => "faux",
+        "model" => model,
+        "stopReason" => "stop",
+        "content" => [%{"type" => "text", "text" => "Done."}]
+      }
+
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => role,
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{"id" => id, "kind" => "pi.assistant", "model" => [message]}
+        }
+      })
+    end
+
+    test "the details name the head model, with the reasoning level that was set", %{
+      conn: conn,
+      project: project
+    } do
+      models = %{"head" => %{"provider" => "faux", "modelId" => "faux-1", "reasoning" => "high"}}
+      run = run_fixture(project, "shop-20", %{status: :running, models: models})
+      plain = %{"head" => %{"provider" => "faux", "modelId" => "faux-2"}}
+      other = run_fixture(project, "shop-21", %{status: :running, models: plain})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "dl#run-details #run-model-label", "Head model")
+      assert has_element?(view, "#run-model #run-model-id", "faux/faux-1")
+      assert has_element?(view, "#run-model #run-model-reasoning", "high")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{other.id}")
+      assert has_element?(view, "#run-model-id", "faux/faux-2")
+      refute has_element?(view, "#run-model-reasoning")
+    end
+
+    test "a run from before the models were kept says so", %{conn: conn, project: project} do
+      run = run_fixture(project, "shop-22", %{status: :running})
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#run-model-label", "Head model")
+      assert has_element?(view, "#run-model", "Not recorded")
+      refute has_element?(view, "#run-model-id")
+    end
+
+    test "a subagent's tab and the details name the model its conversation ran on", %{
+      conn: conn,
+      project: project
+    } do
+      models = %{"head" => %{"provider" => "faux", "modelId" => "faux-1"}}
+      run = run_fixture(project, "shop-23", %{status: :running, models: models})
+      answer(run, 1, "head", 1, "faux-1")
+      answer(run, 2, "sub:#24", 1, "faux-small")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-2[title='done · faux/faux-small']")
+      assert has_element?(view, "#tab-1[title='working']")
+      assert has_element?(view, "#run-model-id", "faux/faux-1")
+
+      view |> element("#tab-2") |> render_click()
+      assert has_element?(view, "#run-model-label", "Model")
+      assert has_element?(view, "#run-model-id", "faux/faux-small")
+
+      # A subagent that starts while the page is open is named with its first answer.
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => 3,
+        "role" => "sub:#25",
+        "event" => %{"type" => "message_start", "message" => %{"role" => "assistant"}}
+      })
+
+      eventually(fn -> assert has_element?(view, "#tab-3") end)
+      assert has_element?(view, "#tab-3[title=working]")
+      view |> element("#tab-3") |> render_click()
+      assert has_element?(view, "#run-model", "Not known yet")
+
+      answer(run, 3, "sub:#25", 1, "faux-large")
+      eventually(fn -> assert has_element?(view, "#tab-3[title='done · faux/faux-large']") end)
+      assert has_element?(view, "#run-model-id", "faux/faux-large")
+
+      view |> element("#tab-1") |> render_click()
+      assert has_element?(view, "#run-model-label", "Head model")
+      assert has_element?(view, "#run-model-id", "faux/faux-1")
+    end
+  end
+
+  describe "conversation tabs" do
+    defp entry(run, conversation, role, id, kind, stop \\ nil) do
+      message = %{"role" => "assistant", "stopReason" => stop, "content" => []}
+
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => role,
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{"id" => id, "kind" => kind, "model" => [message]}
+        }
+      })
+    end
+
+    test "a running run has a working head and subagents by their last entry", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-40", %{status: :running})
+      entry(run, 1, "head", 1, "pi.user")
+      entry(run, 2, "sub:#12", 1, "pi.assistant", "stop")
+      entry(run, 3, "sub:#13", 1, "pi.assistant", "toolUse")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-1[data-state=working][title=working] [data-pulse]")
+      assert has_element?(view, "#tab-2[data-state=done][title=done] :not([data-pulse])")
+      assert has_element?(view, "#tab-3[data-state=working] [data-pulse]")
+    end
+
+    test "a waiting run has a waiting head", %{conn: conn, project: project} do
+      run = run_fixture(project, "shop-41", %{status: :waiting_for_input})
+      entry(run, 1, "head", 1, "pi.assistant", "toolUse")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-1[data-state=waiting][title='waiting for input']")
+      assert has_element?(view, "#tab-1 :not([data-pulse])")
+    end
+
+    test "a completed run is done in every tab, however its conversations ended", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-42", %{status: :completed})
+      entry(run, 1, "head", 1, "pi.assistant", "stop")
+      entry(run, 2, "sub:#12", 1, "pi.tool-result")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-1[data-state=done]")
+      assert has_element?(view, "#tab-2[data-state=done]")
+    end
+
+    test "a failed run has a failed head; a subagent fails only when it ended in an error", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-43", %{status: :failed})
+      entry(run, 1, "head", 1, "pi.assistant", "stop")
+      entry(run, 2, "sub:#12", 1, "pi.assistant", "error")
+      entry(run, 3, "sub:#13", 1, "pi.assistant", "stop")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-1[data-state=failed][title=failed]")
+      assert has_element?(view, "#tab-2[data-state=failed]")
+      assert has_element?(view, "#tab-3[data-state=done]")
+    end
+
+    test "an earlier attempt is over; a subagent that ended in an error is failed", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-44", %{status: :running})
+      entry(run, 1, "head", 1, "pi.user")
+      entry(run, 2, "sub:#12", 1, "pi.tool-result")
+      entry(run, 3, "sub:#12", 1, "pi.assistant", "error")
+      entry(run, 4, "sub:#12", 1, "pi.tool-result")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-2[data-state=done]")
+      assert has_element?(view, "#tab-3[data-state=failed]")
+      assert has_element?(view, "#tab-4[data-state=working]")
+    end
+
+    test "the dots change with the events and the run's status", %{conn: conn, project: project} do
+      run = run_fixture(project, "shop-45", %{status: :running})
+      entry(run, 1, "head", 1, "pi.user")
+      entry(run, 2, "sub:#12", 1, "pi.user")
+
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+      assert has_element?(view, "#tab-2[data-state=working]")
+
+      entry(run, 2, "sub:#12", 2, "pi.assistant", "stop")
+      eventually(fn -> assert has_element?(view, "#tab-2[data-state=done]") end)
+
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => 2,
+        "role" => "sub:#12",
+        "event" => %{"type" => "message_start", "message" => %{"role" => "assistant"}}
+      })
+
+      eventually(fn -> assert has_element?(view, "#tab-2[data-state=working]") end)
+      entry(run, 2, "sub:#12", 3, "pi.assistant", "error")
+      eventually(fn -> assert has_element?(view, "#tab-2[data-state=failed]") end)
+
+      {:ok, _run} = Runs.wait_for_input(run)
+      eventually(fn -> assert has_element?(view, "#tab-1[data-state=waiting]") end)
+    end
+  end
+
+  describe "status history" do
+    test "the sidebar lists every status the run has had, and grows as it changes", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-30", %{status: :running})
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#run-sidebar #run-details + div + #run-timeline", "Timeline")
+      entries = "#run-timeline-entries > li"
+      assert has_element?(view, "#{entries}:nth-child(1)[data-status=picked_up]", "Picked up")
+
+      assert has_element?(
+               view,
+               "#{entries}:nth-child(2)[data-status=provisioning]",
+               "Provisioning"
+             )
+
+      assert has_element?(
+               view,
+               "#{entries}:nth-child(3)[data-status=running]:last-child",
+               "Running"
+             )
+
+      assert has_element?(view, "#{entries}:nth-child(3) time[datetime]")
+      refute has_element?(view, "#run-failed-line")
+
+      {:ok, _waiting} = Runs.wait_for_input(run)
+
+      eventually(fn ->
+        assert has_element?(
+                 view,
+                 "#{entries}:nth-child(4)[data-status=waiting_for_input]:last-child",
+                 "Waiting for input"
+               )
+      end)
+
+      {:ok, _failed} = Runs.fail(Runs.get_run!(run.id), %{error: "boom"})
+
+      eventually(fn ->
+        assert has_element?(
+                 view,
+                 "#{entries}:nth-child(5)[data-status=failed]:last-child",
+                 "Failed"
+               )
+
+        assert has_element?(view, "#run-failed-line time[datetime]")
+      end)
+    end
+
+    test "the head conversation of a failed run ends with the status change", %{
+      conn: conn,
+      project: project
+    } do
+      run = run_fixture(project, "shop-31", %{status: :running})
+
+      for {conversation, role} <- [{1, "head"}, {2, "sub:#12"}] do
+        Runs.ingest(%{
+          "type" => "agent_event",
+          "run_id" => run.id,
+          "conversation" => conversation,
+          "role" => role,
+          "event" => %{
+            "type" => "message_end",
+            "entry" => %{"id" => 1, "kind" => "pi.assistant", "content" => []}
+          }
+        })
+      end
+
+      {:ok, _failed} = Runs.fail(run, %{error: "boom"})
+      {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+      assert has_element?(view, "#transcript + #run-failed-line", "status → failed ·")
+      view |> element("#tab-2") |> render_click()
+      refute has_element?(view, "#run-failed-line")
+      view |> element("#tab-1") |> render_click()
+      assert has_element?(view, "#run-failed-line")
+    end
   end
 end

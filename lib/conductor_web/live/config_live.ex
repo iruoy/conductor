@@ -21,91 +21,158 @@ defmodule ConductorWeb.ConfigLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
-      <.header>
-        Settings
-        <:subtitle>
-          Models per role and run limits. Subagents pick low, medium or high by subtask complexity.
-        </:subtitle>
-      </.header>
-
-      <.form
-        for={@settings_form}
-        id="settings-form"
-        phx-change="change_settings"
-        phx-submit="save_settings"
-        class="space-y-4"
-      >
-        <div :if={@models_error} role="alert" class="alert alert-warning alert-soft">
-          <.icon name="hero-exclamation-triangle" class="size-5" />
-          <span>Could not list models from the runner ({@models_error}); showing the saved choices only.</span>
-        </div>
-        <div class="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-          <div :for={{role, model_form} <- @model_forms} class="flex items-end gap-2">
-            <div class="grow">
+    <Layouts.app flash={@flash} current_page={:config} waiting_count={@waiting_count}>
+      <h1 id="config-heading" class="sr-only">Configuration</h1>
+      <div class="flex max-w-[1080px] flex-col gap-3 p-3">
+        <section id="settings" class="rounded-lg border border-base-300 bg-base-100">
+          <header class="flex h-11 items-center gap-3 border-b border-base-300 px-4">
+            <h2 class="text-sm font-semibold">Settings</h2>
+            <p class="min-w-0 flex-1 truncate text-fg-secondary">
+              Models per task complexity and run limits
+            </p>
+            <button
+              type="submit"
+              form="settings-form"
+              class="btn btn-sm btn-primary h-7 min-h-0"
+              phx-disable-with="Saving…"
+            >
+              Save settings
+            </button>
+          </header>
+          <.form
+            for={@settings_form}
+            id="settings-form"
+            phx-change="change_settings"
+            phx-submit="save_settings"
+            class="space-y-3 p-4"
+          >
+            <div
+              :if={@models_error}
+              role="alert"
+              class="flex items-center gap-2 rounded-md bg-chip-warning-bg px-3 py-1.5 text-chip-warning-fg"
+            >
+              <.icon name="hero-exclamation-triangle" class="size-4 shrink-0" />
+              <span>Could not list models from the runner (<span class="font-mono">{@models_error}</span>); showing the saved choices only.</span>
+            </div>
+            <div class="grid gap-x-3 gap-y-2 sm:grid-cols-2 xl:grid-cols-4">
+              <div :for={{role, model_form} <- @model_forms} class="flex items-end gap-2">
+                <div class="min-w-0 grow">
+                  <.input
+                    type="select"
+                    id={"model-#{role}"}
+                    field={model_form[:model]}
+                    label={"#{String.capitalize(role)} model"}
+                    options={model_options(@models, model_form[:model].value)}
+                    prompt={if role == "head", do: "Choose a model", else: "Same as head"}
+                  />
+                </div>
+                <div class="w-24 shrink-0">
+                  <.input
+                    type="select"
+                    id={"reasoning-#{role}"}
+                    field={model_form[:reasoning]}
+                    label="Reasoning"
+                    value={reasoning_value(@model_defaults, @model_choices[role])}
+                    options={reasoning_options(@models, @model_choices[role])}
+                    prompt={
+                      if reasoning_value(@model_defaults, @model_choices[role]),
+                        do: nil,
+                        else: "default"
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+            <div class="grid gap-x-3 sm:grid-cols-2 xl:grid-cols-4">
               <.input
-                type="select"
-                id={"model-#{role}"}
-                field={model_form[:model]}
-                label={"#{String.capitalize(role)} model"}
-                options={model_options(@models, model_form[:model].value)}
-                prompt={if role == "head", do: "Choose a model", else: "Same as head"}
+                field={@settings_form[:max_concurrent]}
+                type="number"
+                label="Max concurrent runs (0 pauses)"
+              />
+              <.input
+                field={@settings_form[:prune_days]}
+                type="number"
+                label="Prune workspaces after (days)"
               />
             </div>
-            <div class="w-32">
-              <.input
-                type="select"
-                id={"reasoning-#{role}"}
-                field={model_form[:reasoning]}
-                label="Reasoning"
-                value={reasoning_value(@model_defaults, @model_choices[role])}
-                options={reasoning_options(@models, @model_choices[role])}
-                prompt={
-                  if reasoning_value(@model_defaults, @model_choices[role]), do: nil, else: "default"
-                }
-              />
+          </.form>
+        </section>
+
+        <section id="repos-section" class="rounded-lg border border-base-300 bg-base-100">
+          <header class="flex h-11 items-center gap-2 px-4">
+            <h2 class="text-sm font-semibold">Repositories</h2>
+            <span
+              id="repos-count"
+              class="rounded-full bg-muted px-1.5 text-[11px] leading-4 text-fg-secondary"
+            >
+              {length(@repos)}
+            </span>
+            <span class="flex-1"></span>
+            <button
+              id="new-repo"
+              phx-click="edit_repo"
+              phx-value-id="new"
+              class="btn btn-sm h-[26px] min-h-0 border-line-strong bg-base-100 text-xs font-medium"
+            >
+              New repository
+            </button>
+          </header>
+
+          <div class="overflow-x-auto border-t border-base-300">
+            <.table id="repos" rows={@repos}>
+              <:col :let={repo} label="Name"><span class="font-mono">{repo.name}</span></:col>
+              <:col :let={repo} label="GitHub">{repo.owner}/{repo.slug}</:col>
+              <:col :let={repo} label="Base">
+                <span class="font-mono text-fg-secondary">{repo.base_branch || "staging → main"}</span>
+              </:col>
+              <:col :let={repo} label="Tests">
+                <span class="font-mono">{repo.test_command}</span>
+              </:col>
+              <:action :let={repo}>
+                <button
+                  id={"edit-repo-#{repo.id}"}
+                  phx-click="edit_repo"
+                  phx-value-id={repo.id}
+                  class="link link-hover"
+                >
+                  Edit
+                </button>
+                <button
+                  id={"delete-repo-#{repo.id}"}
+                  phx-click={show_modal("confirm-delete-repo-#{repo.id}")}
+                  class="link link-hover text-chip-error-fg"
+                >
+                  Delete
+                </button>
+                <.confirm_modal
+                  id={"confirm-delete-repo-#{repo.id}"}
+                  title={"Delete #{repo.name}?"}
+                  confirm="Delete"
+                  on_confirm={JS.push("delete_repo", value: %{id: repo.id})}
+                >
+                  Conductor stops working in this repository. The repository on GitHub is not touched.
+                </.confirm_modal>
+              </:action>
+            </.table>
+          </div>
+
+          <.form
+            :if={@repo_form}
+            for={@repo_form}
+            id="repo-form"
+            phx-change="change_repo"
+            phx-submit="save_repo"
+            class="space-y-2 border-t border-base-300 p-4"
+          >
+            <div
+              :if={@github_repos_error}
+              role="alert"
+              class="flex items-center gap-2 rounded-md bg-chip-warning-bg px-3 py-1.5 text-chip-warning-fg"
+            >
+              <.icon name="hero-exclamation-triangle" class="size-4 shrink-0" />
+              <span>Could not list the repositories from GitHub ({@github_repos_error}); enter one by hand.</span>
             </div>
-          </div>
-        </div>
-        <div class="grid gap-x-6 sm:grid-cols-2">
-          <.input
-            field={@settings_form[:max_concurrent]}
-            type="number"
-            label="Max concurrent runs (0 pauses)"
-          />
-          <.input
-            field={@settings_form[:prune_days]}
-            type="number"
-            label="Prune workspaces after (days)"
-          />
-        </div>
-        <.button variant="primary" phx-disable-with="Saving…">Save settings</.button>
-      </.form>
-
-      <div class="divider"></div>
-
-      <.header>
-        Repositories
-        <:actions>
-          <.button id="new-repo" phx-click="edit_repo" phx-value-id="new">New repository</.button>
-        </:actions>
-      </.header>
-
-      <.form
-        :if={@repo_form}
-        for={@repo_form}
-        id="repo-form"
-        phx-change="change_repo"
-        phx-submit="save_repo"
-        class="card card-border border-base-300"
-      >
-        <div class="card-body">
-          <div :if={@github_repos_error} role="alert" class="alert alert-warning alert-soft">
-            <.icon name="hero-exclamation-triangle" class="size-5" />
-            <span>Could not list the repositories from GitHub ({@github_repos_error}); enter one by hand.</span>
-          </div>
-          <div class="grid gap-x-6 sm:grid-cols-2">
-            <div :if={@github_repos} class="sm:col-span-2">
+            <div :if={@github_repos}>
               <.input
                 type="select"
                 id="repo-github"
@@ -116,96 +183,142 @@ defmodule ConductorWeb.ConfigLive do
                 prompt="Choose a repository"
               />
             </div>
-            <.input field={@repo_form[:name]} label="Name" placeholder="shop-api" />
+            <div class="grid gap-x-3 gap-y-2 sm:grid-cols-2 xl:grid-cols-4">
+              <.input field={@repo_form[:name]} label="Name" placeholder="shop-api" />
+              <.input
+                field={@repo_form[:clone_url]}
+                label="Clone URL"
+                placeholder="git@github.com:acme/shop-api.git"
+              />
+              <.input field={@repo_form[:owner]} label="GitHub owner" placeholder="acme" />
+              <.input field={@repo_form[:slug]} label="Repository name" placeholder="shop-api" />
+              <.input
+                field={@repo_form[:base_branch]}
+                label="Base branch"
+                placeholder="staging, else main"
+              />
+              <.input
+                field={@repo_form[:test_command]}
+                label="Test command"
+                placeholder="composer test"
+              />
+            </div>
             <.input
-              field={@repo_form[:clone_url]}
-              label="Clone URL"
-              placeholder="git@github.com:acme/shop-api.git"
+              field={@repo_form[:setup_script]}
+              type="textarea"
+              rows="3"
+              label="Setup script (bash)"
             />
-            <.input field={@repo_form[:owner]} label="GitHub owner" placeholder="acme" />
-            <.input field={@repo_form[:slug]} label="Repository name" placeholder="shop-api" />
-            <.input
-              field={@repo_form[:base_branch]}
-              label="Base branch"
-              placeholder="staging, else main"
-            />
-            <.input
-              field={@repo_form[:test_command]}
-              label="Test command"
-              placeholder="composer test"
-            />
+            <div class="flex justify-end gap-2">
+              <button type="button" phx-click="cancel_repo" class="btn btn-sm h-7 min-h-0">
+                Cancel
+              </button>
+              <button class="btn btn-sm btn-primary h-7 min-h-0" phx-disable-with="Saving…">
+                Save repository
+              </button>
+            </div>
+          </.form>
+        </section>
+
+        <section id="projects-section" class="rounded-lg border border-base-300 bg-base-100">
+          <header class="flex h-11 items-center gap-2 px-4">
+            <h2 class="text-sm font-semibold">Projects</h2>
+            <span
+              id="projects-count"
+              class="rounded-full bg-muted px-1.5 text-[11px] leading-4 text-fg-secondary"
+            >
+              {length(@projects)}
+            </span>
+            <span class="flex-1"></span>
+            <button
+              id="new-project"
+              phx-click="edit_project"
+              phx-value-id="new"
+              disabled={@repos == []}
+              class="btn btn-sm h-[26px] min-h-0 border-line-strong bg-base-100 text-xs font-medium"
+            >
+              New project
+            </button>
+          </header>
+
+          <div class="overflow-x-auto border-t border-base-300">
+            <.table id="projects" rows={@projects}>
+              <:col :let={project} label="GitHub project">
+                <span class="font-mono">{project.project_owner}/{project.project_number}</span>
+              </:col>
+              <:col :let={project} label="Repository">
+                <span class="font-mono">{project.repo.name}</span>
+              </:col>
+              <:col :let={project} label="Flow">
+                <span class="flex items-center gap-1.5 whitespace-nowrap">
+                  <span class="rounded bg-muted px-1.5 py-0.5">{project.pickup_status}</span>
+                  <.icon name="hero-arrow-right-mini" class="size-3 text-fg-tertiary" />
+                  <span class="rounded bg-chip-info-bg px-1.5 py-0.5 text-chip-info-fg">
+                    {project.active_status}
+                  </span>
+                  <.icon name="hero-arrow-right-mini" class="size-3 text-fg-tertiary" />
+                  <span class="rounded bg-chip-success-bg px-1.5 py-0.5 text-chip-success-fg">
+                    {project.handoff_status}
+                  </span>
+                </span>
+              </:col>
+              <:col :let={project} label="Enabled">
+                <span
+                  role="img"
+                  aria-label={if project.enabled, do: "Enabled", else: "Disabled"}
+                  class={[
+                    "flex h-4 w-7 items-center rounded-full p-0.5",
+                    if(project.enabled, do: "justify-end bg-success", else: "justify-start bg-muted")
+                  ]}
+                >
+                  <span class="size-3 rounded-full bg-white shadow-sm"></span>
+                </span>
+              </:col>
+              <:action :let={project}>
+                <button
+                  id={"edit-project-#{project.id}"}
+                  phx-click="edit_project"
+                  phx-value-id={project.id}
+                  class="link link-hover"
+                >
+                  Edit
+                </button>
+                <button
+                  id={"delete-project-#{project.id}"}
+                  phx-click={show_modal("confirm-delete-project-#{project.id}")}
+                  class="link link-hover text-error"
+                >
+                  Delete
+                </button>
+                <.confirm_modal
+                  id={"confirm-delete-project-#{project.id}"}
+                  title={"Delete #{project.project_owner}/#{project.project_number}?"}
+                  confirm="Delete"
+                  on_confirm={JS.push("delete_project", value: %{id: project.id})}
+                >
+                  Conductor stops picking up its issues. The project on GitHub is not touched.
+                </.confirm_modal>
+              </:action>
+            </.table>
           </div>
-          <.input field={@repo_form[:setup_script]} type="textarea" label="Setup script (bash)" />
-          <div class="card-actions">
-            <.button variant="primary" phx-disable-with="Saving…">Save repository</.button>
-            <button type="button" phx-click="cancel_repo" class="btn btn-ghost">Cancel</button>
-          </div>
-        </div>
-      </.form>
 
-      <.table id="repos" rows={@repos}>
-        <:col :let={repo} label="Name"><span class="font-mono">{repo.name}</span></:col>
-        <:col :let={repo} label="GitHub">{repo.owner}/{repo.slug}</:col>
-        <:col :let={repo} label="Base">{repo.base_branch || "staging → main"}</:col>
-        <:col :let={repo} label="Tests">
-          <span class="font-mono text-xs">{repo.test_command}</span>
-        </:col>
-        <:action :let={repo}>
-          <button
-            id={"edit-repo-#{repo.id}"}
-            phx-click="edit_repo"
-            phx-value-id={repo.id}
-            class="btn btn-ghost btn-xs"
-          >Edit</button>
-          <button
-            id={"delete-repo-#{repo.id}"}
-            phx-click={show_modal("confirm-delete-repo-#{repo.id}")}
-            class="btn btn-ghost btn-xs text-error"
+          <.form
+            :if={@project_form}
+            for={@project_form}
+            id="project-form"
+            phx-change="change_project"
+            phx-submit="save_project"
+            class="space-y-2 border-t border-base-300 p-4"
           >
-            Delete
-          </button>
-          <.confirm_modal
-            id={"confirm-delete-repo-#{repo.id}"}
-            title={"Delete #{repo.name}?"}
-            confirm="Delete"
-            on_confirm={JS.push("delete_repo", value: %{id: repo.id})}
-          >
-            Conductor stops working in this repository. The repository on GitHub is not touched.
-          </.confirm_modal>
-        </:action>
-      </.table>
-
-      <div class="divider"></div>
-
-      <.header>
-        Projects
-        <:actions>
-          <.button
-            id="new-project"
-            phx-click="edit_project"
-            phx-value-id="new"
-            disabled={@repos == []}
-          >
-            New project
-          </.button>
-        </:actions>
-      </.header>
-
-      <.form
-        :if={@project_form}
-        for={@project_form}
-        id="project-form"
-        phx-change="change_project"
-        phx-submit="save_project"
-        class="card card-border border-base-300"
-      >
-        <div class="card-body">
-          <div :if={@github_projects_error} role="alert" class="alert alert-warning alert-soft">
-            <.icon name="hero-exclamation-triangle" class="size-5" />
-            <span>Could not list the projects from GitHub ({@github_projects_error}); enter one by hand.</span>
-          </div>
-          <div class="grid gap-x-6 sm:grid-cols-2">
-            <div :if={@github_projects} class="sm:col-span-2">
+            <div
+              :if={@github_projects_error}
+              role="alert"
+              class="flex items-center gap-2 rounded-md bg-chip-warning-bg px-3 py-1.5 text-chip-warning-fg"
+            >
+              <.icon name="hero-exclamation-triangle" class="size-4 shrink-0" />
+              <span>Could not list the projects from GitHub ({@github_projects_error}); enter one by hand.</span>
+            </div>
+            <div :if={@github_projects}>
               <.input
                 type="select"
                 id="project-github"
@@ -221,103 +334,73 @@ defmodule ConductorWeb.ConfigLive do
                 prompt="Choose a project"
               />
             </div>
+            <div class="grid gap-x-3 gap-y-2 sm:grid-cols-2 xl:grid-cols-4">
+              <.input
+                field={@project_form[:repo_id]}
+                type="select"
+                label="Repository"
+                options={Enum.map(@repos, &{&1.name, &1.id})}
+              />
+              <.input
+                field={@project_form[:runner_login]}
+                label="Runner GitHub login"
+                placeholder="conductor-bot"
+              />
+              <.input
+                field={@project_form[:project_owner]}
+                label="GitHub project owner (organization or user)"
+                placeholder="acme"
+              />
+              <.input
+                field={@project_form[:project_number]}
+                type="number"
+                label="GitHub project number"
+                placeholder="4"
+              />
+              <.status_input
+                field={@project_form[:pickup_status]}
+                label="Pick up from status"
+                placeholder="Ready"
+                statuses={@project_statuses}
+              />
+              <.status_input
+                field={@project_form[:active_status]}
+                label="Status while working"
+                placeholder="In progress"
+                statuses={@project_statuses}
+              />
+              <.status_input
+                field={@project_form[:handoff_status]}
+                label="Status after the PR"
+                placeholder="In review"
+                statuses={@project_statuses}
+              />
+              <.status_input
+                field={@project_form[:done_status]}
+                label="Status of finished subtasks"
+                placeholder="Done"
+                statuses={@project_statuses}
+              />
+            </div>
             <.input
-              field={@project_form[:repo_id]}
-              type="select"
-              label="Repository"
-              options={Enum.map(@repos, &{&1.name, &1.id})}
+              field={@project_form[:item_filter]}
+              label="Project filter (optional, as in a project view)"
+              placeholder="assignee:conductor-bot is:open"
             />
-            <.input
-              field={@project_form[:runner_login]}
-              label="Runner GitHub login"
-              placeholder="conductor-bot"
-            />
-            <.input
-              field={@project_form[:project_owner]}
-              label="GitHub project owner (organization or user)"
-              placeholder="acme"
-            />
-            <.input
-              field={@project_form[:project_number]}
-              type="number"
-              label="GitHub project number"
-              placeholder="4"
-            />
-            <.status_input
-              field={@project_form[:pickup_status]}
-              label="Pick up from status"
-              placeholder="Ready"
-              statuses={@project_statuses}
-            />
-            <.status_input
-              field={@project_form[:active_status]}
-              label="Status while working"
-              placeholder="In progress"
-              statuses={@project_statuses}
-            />
-            <.status_input
-              field={@project_form[:handoff_status]}
-              label="Status after the PR"
-              placeholder="In review"
-              statuses={@project_statuses}
-            />
-            <.status_input
-              field={@project_form[:done_status]}
-              label="Status of finished subtasks"
-              placeholder="Done"
-              statuses={@project_statuses}
-            />
-          </div>
-          <.input
-            field={@project_form[:item_filter]}
-            label="Project filter (optional, as in a project view)"
-            placeholder="assignee:conductor-bot is:open"
-          />
-          <.input field={@project_form[:enabled]} type="checkbox" label="Enabled" />
-          <div class="card-actions">
-            <.button variant="primary" phx-disable-with="Saving…">Save project</.button>
-            <button type="button" phx-click="cancel_project" class="btn btn-ghost">Cancel</button>
-          </div>
-        </div>
-      </.form>
-
-      <.table id="projects" rows={@projects}>
-        <:col :let={project} label="GitHub project">
-          <span class="font-mono">{project.project_owner}/{project.project_number}</span>
-        </:col>
-        <:col :let={project} label="Repository">{project.repo.name}</:col>
-        <:col :let={project} label="Flow">
-          {project.pickup_status} → {project.active_status} → {project.handoff_status}
-        </:col>
-        <:col :let={project} label="Enabled">
-          <.icon :if={project.enabled} name="hero-check" class="size-4 text-success" />
-        </:col>
-        <:action :let={project}>
-          <button
-            id={"edit-project-#{project.id}"}
-            phx-click="edit_project"
-            phx-value-id={project.id}
-            class="btn btn-ghost btn-xs"
-          >
-            Edit
-          </button>
-          <button
-            id={"delete-project-#{project.id}"}
-            phx-click={show_modal("confirm-delete-project-#{project.id}")}
-            class="btn btn-ghost btn-xs text-error"
-          >
-            Delete
-          </button>
-          <.confirm_modal
-            id={"confirm-delete-project-#{project.id}"}
-            title={"Delete #{project.project_owner}/#{project.project_number}?"}
-            confirm="Delete"
-            on_confirm={JS.push("delete_project", value: %{id: project.id})}
-          >
-            Conductor stops picking up its issues. The project on GitHub is not touched.
-          </.confirm_modal>
-        </:action>
-      </.table>
+            <div class="flex items-center justify-between gap-2">
+              <.input field={@project_form[:enabled]} type="checkbox" label="Enabled" />
+              <div class="flex gap-2">
+                <button type="button" phx-click="cancel_project" class="btn btn-sm h-7 min-h-0">
+                  Cancel
+                </button>
+                <button class="btn btn-sm btn-primary h-7 min-h-0" phx-disable-with="Saving…">
+                  Save project
+                </button>
+              </div>
+            </div>
+          </.form>
+        </section>
+      </div>
     </Layouts.app>
     """
   end
@@ -699,6 +782,9 @@ defmodule ConductorWeb.ConfigLive do
       end)
 
     listed? = Enum.any?(options, fn {_, opts} -> Enum.any?(opts, &(elem(&1, 1) == saved)) end)
-    if saved && not listed?, do: [{"saved", [{saved, saved}]} | options], else: options
+
+    if saved not in [nil, ""] and not listed?,
+      do: [{"saved", [{saved, saved}]} | options],
+      else: options
   end
 end

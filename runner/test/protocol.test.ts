@@ -132,6 +132,17 @@ describe("runner protocol", () => {
 		const text = toolResult.entry.model[0]!.content[0]!.text;
 		expect(text).toContain("## PROJ-7: done\n\nB is done");
 		expect(text.indexOf("PROJ-7")).toBeLessThan(text.indexOf("PROJ-6")); // in the order the head gave them
+
+		// Conductor reads the model a conversation ran on from its assistant messages.
+		const answers = events.flatMap((e) => {
+			const event = e.event as { type: string; entry?: { kind: string; model: Record<string, unknown>[] } } | undefined;
+			return e.type === "agent_event" && event?.type === "message_end" && event.entry?.kind === "pi.assistant"
+				? [{ ...event.entry.model[0], conversation: e.role }]
+				: [];
+		});
+		for (const role of ["head", "sub:PROJ-6", "sub:PROJ-7"]) {
+			expect(answers.find((a) => a.conversation === role)).toMatchObject({ provider: "faux", model: "faux-1" });
+		}
 	});
 
 	it("lets a subagent move its subtask through the project's statuses", async () => {

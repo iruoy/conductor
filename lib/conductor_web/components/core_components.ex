@@ -62,25 +62,26 @@ defmodule ConductorWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
-      phx-hook={@kind == :info && ".AutoDismiss"}
+      phx-hook={@kind == :info && "#{inspect(__MODULE__)}.AutoDismiss"}
       role="alert"
-      class="toast toast-top toast-end z-50"
+      class="toast toast-bottom toast-end z-50 p-3 [&[hidden]]:hidden"
       {@rest}
     >
-      <div class={[
-        "alert w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap",
-        @kind == :info && "alert-info",
-        @kind == :error && "alert-error"
-      ]}>
-        <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
-        <div>
-          <p :if={@title} class="font-semibold">{@title}</p>
-          <p>{msg}</p>
-        </div>
-        <div class="flex-1" />
-        <button type="button" class="group self-start cursor-pointer" aria-label={gettext("close")}>
-          <.icon name="hero-x-mark" class="size-5 opacity-40 group-hover:opacity-70" />
+      <div class="flex max-w-sm items-center gap-2 rounded-box bg-neutral px-3 py-2 text-neutral-content shadow-lg">
+        <span class={[
+          "size-2 shrink-0 rounded-full",
+          @kind == :info && "bg-dot-blue",
+          @kind == :error && "bg-dot-red"
+        ]} />
+        <p class="min-w-0 text-wrap">
+          <span :if={@title} class="font-semibold">{@title} </span>{msg}
+        </p>
+        <button
+          type="button"
+          class="group -mr-1 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded"
+          aria-label={gettext("close")}
+        >
+          <.icon name="hero-x-mark" class="size-3.5 opacity-60 group-hover:opacity-100" />
         </button>
       </div>
     </div>
@@ -225,7 +226,7 @@ defmodule ConductorWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset min-w-0">
       <label for={@id}>
         <input
           type="hidden"
@@ -234,14 +235,14 @@ defmodule ConductorWeb.CoreComponents do
           disabled={@rest[:disabled]}
           form={@rest[:form]}
         />
-        <span class="label">
+        <span class="label text-[13px] text-base-content">
           <input
             type="checkbox"
             id={@id}
             name={@name}
             value="true"
             checked={@checked}
-            class={@class || "checkbox checkbox-sm"}
+            class={@class || "checkbox checkbox-xs"}
             {@rest}
           />{@label}
         </span>
@@ -253,13 +254,16 @@ defmodule ConductorWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset min-w-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-0.5 block text-[11px] text-fg-secondary">{@label}</span>
         <select
           id={@id}
           name={@name}
-          class={[@class || "w-full select", @errors != [] && (@error_class || "select-error")]}
+          class={[
+            @class || "select select-sm h-7 min-h-0 w-full text-[13px]",
+            @errors != [] && (@error_class || "select-error")
+          ]}
           multiple={@multiple}
           {@rest}
         >
@@ -274,14 +278,14 @@ defmodule ConductorWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset min-w-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-0.5 block text-[11px] text-fg-secondary">{@label}</span>
         <textarea
           id={@id}
           name={@name}
           class={[
-            @class || "w-full textarea",
+            @class || "textarea textarea-sm w-full font-mono text-[13px]",
             @errors != [] && (@error_class || "textarea-error")
           ]}
           {@rest}
@@ -295,16 +299,16 @@ defmodule ConductorWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
+    <div class="fieldset min-w-0">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label} class="mb-0.5 block text-[11px] text-fg-secondary">{@label}</span>
         <input
           type={@type}
           name={@name}
           id={@id}
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
           class={[
-            @class || "w-full input",
+            @class || "input input-sm h-7 min-h-0 w-full text-[13px]",
             @errors != [] && (@error_class || "input-error")
           ]}
           {@rest}
@@ -318,8 +322,8 @@ defmodule ConductorWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
-      <.icon name="hero-exclamation-circle" class="size-5" />
+    <p class="mt-1 flex items-center gap-1.5 text-xs text-error">
+      <.icon name="hero-exclamation-circle" class="size-4" />
       {render_slot(@inner_block)}
     </p>
     """
@@ -380,26 +384,31 @@ defmodule ConductorWeb.CoreComponents do
       end
 
     ~H"""
-    <table class="table table-zebra">
+    <table class="table table-sm w-full">
       <thead>
         <tr>
-          <th :for={col <- @col}>{col[:label]}</th>
+          <th
+            :for={col <- @col}
+            class="h-8 px-4 text-[11px] font-medium tracking-wide text-fg-secondary uppercase"
+          >
+            {col[:label]}
+          </th>
           <th :if={@action != []}>
             <span class="sr-only">{gettext("Actions")}</span>
           </th>
         </tr>
       </thead>
       <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
-        <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
+        <tr :for={row <- @rows} id={@row_id && @row_id.(row)} class="hover:bg-row-hover">
           <td
             :for={col <- @col}
             phx-click={@row_click && @row_click.(row)}
-            class={@row_click && "hover:cursor-pointer"}
+            class={["h-9 px-4", @row_click && "hover:cursor-pointer"]}
           >
             {render_slot(col, @row_item.(row))}
           </td>
-          <td :if={@action != []} class="w-0 font-semibold">
-            <div class="flex gap-4">
+          <td :if={@action != []} class="h-9 w-0 px-4">
+            <div class="flex items-center justify-end gap-3">
               <%= for action <- @action do %>
                 {render_slot(action, @row_item.(row))}
               <% end %>
@@ -483,12 +492,16 @@ defmodule ConductorWeb.CoreComponents do
     ~H"""
     <%!-- LiveView must not patch away the `open` the browser sets while the dialog is shown. --%>
     <dialog id={@id} class="modal" phx-update="ignore">
-      <div class="modal-box whitespace-normal text-left font-normal">
-        <h3 class="text-lg font-bold">{@title}</h3>
-        <p :if={@inner_block != []} class="py-2 text-sm">{render_slot(@inner_block)}</p>
-        <form method="dialog" class="modal-action">
-          <button class="btn">{gettext("Cancel")}</button>
-          <button id={"#{@id}-confirm"} class="btn btn-error" phx-click={@on_confirm}>
+      <div class="modal-box w-[360px] max-w-full whitespace-normal p-3 text-left font-normal">
+        <h3 class="text-sm font-semibold">{@title}</h3>
+        <p :if={@inner_block != []} class="py-2">{render_slot(@inner_block)}</p>
+        <form method="dialog" class="modal-action mt-2 justify-end gap-2">
+          <button class="btn btn-sm h-7 min-h-7">{gettext("Cancel")}</button>
+          <button
+            id={"#{@id}-confirm"}
+            class="btn btn-sm btn-error h-7 min-h-7"
+            phx-click={@on_confirm}
+          >
             {@confirm}
           </button>
         </form>

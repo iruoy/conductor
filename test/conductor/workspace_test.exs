@@ -63,6 +63,67 @@ defmodule Conductor.WorkspaceTest do
     assert File.exists?(Path.join(path, "earlier.txt"))
   end
 
+  test "runs setup with only Bash and Git on PATH", %{tmp_dir: dir} do
+    remote = git_remote(dir)
+    bin = Path.join(dir, "bin")
+    File.mkdir_p!(bin)
+    File.ln_s!(System.find_executable("git"), Path.join(bin, "git"))
+    File.ln_s!(System.find_executable("bash"), Path.join(bin, "bash"))
+
+    with_path(bin, fn ->
+      assert {:ok, %{setup_output: "installed\n"}} =
+               Workspace.provision(repo(remote, %{setup_script: "echo installed"}), "SHOP-7", %{})
+    end)
+  end
+
+  test "reports a timed out setup without marking it complete", %{tmp_dir: dir} do
+    previous = Application.get_env(:conductor, :setup_timeout_seconds)
+    Application.put_env(:conductor, :setup_timeout_seconds, 0.1)
+
+    on_exit(fn ->
+      if previous == nil do
+        Application.delete_env(:conductor, :setup_timeout_seconds)
+      else
+        Application.put_env(:conductor, :setup_timeout_seconds, previous)
+      end
+    end)
+
+    remote = git_remote(dir)
+
+    repository =
+      repo(remote, %{
+        setup_script: """
+        trap 'wait; exit 0' TERM
+        echo starting
+        echo warning >&2
+        sleep 30 &
+        echo $! > .setup-child
+        wait
+        """
+      })
+
+    assert {:error, "setup script timed out after 0.1s:\nstarting\nwarning\n"} =
+             Workspace.provision(repository, "SHOP-9", %{})
+
+    path = Workspace.path(repository, "SHOP-9")
+    refute File.exists?(Path.join([path, ".git", "conductor-setup-done"]))
+
+    child_pid = path |> Path.join(".setup-child") |> File.read!() |> String.trim()
+    {_, status} = System.cmd("kill", ["-0", child_pid], stderr_to_stdout: true)
+    assert status != 0
+  end
+
+  defp with_path(path, fun) do
+    previous = System.fetch_env!("PATH")
+    System.put_env("PATH", path)
+
+    try do
+      fun.()
+    after
+      System.put_env("PATH", previous)
+    end
+  end
+
   test "runs the setup script once and reports failures", %{tmp_dir: dir} do
     remote = git_remote(dir)
     ok = repo(remote, %{setup_script: "echo installing; touch .installed"})

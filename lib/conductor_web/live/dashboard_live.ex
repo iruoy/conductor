@@ -1,143 +1,437 @@
 defmodule ConductorWeb.DashboardLive do
   use ConductorWeb, :live_view
   alias Conductor.{Coordinator, Poller, Runs}
+  alias Conductor.Runs.Run
 
   @log_limit 200
+  # A run that is under way shows its duration up to now, to the minute.
+  @tick :timer.minutes(1)
+  @under_way Run.statuses() -- [:picked_up | Run.terminal_statuses()]
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Runs.subscribe()
+    # The "runs" topic is subscribed by the ConductorWeb.WaitingCount hook of the live session.
+    if connected?(socket) do
+      Poller.subscribe()
+      Process.send_after(self(), :tick, @tick)
+    end
 
+    %{interval: interval, last_poll: last_poll} = Poller.status()
+
+    # The runs themselves are read by handle_params/3, which knows the filter.
     {:ok,
      socket
-     |> assign(page_title: "Runs", selected: nil, log_seq: 0)
-     |> stream(:runs, Runs.list_runs())
+     |> assign(page_title: "Runs", selected: nil, log_seq: 0, now: DateTime.utc_now())
+     |> assign(interval: interval, last_poll: last_poll)
+     |> assign(group: :all, text: "", run_ids: MapSet.new())
+     |> assign(counts: %{}, shown_count: 0, total_count: 0)
+     |> stream(:runs, [])
      |> stream(:log, [])}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    group = parse_group(params["status"])
+    text = String.trim(to_string(params["q"] || ""))
+
+    {:noreply,
+     socket
+     |> assign(group: group, text: text, now: DateTime.utc_now())
+     |> load_runs()
+     # A new filter puts the keyboard cursor back on the first row.
+     |> push_event("runs:reset-cursor", %{})}
   end
 
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
-      <.header>
-        Runs
-        <:subtitle>Issues picked up from GitHub, newest first.</:subtitle>
-        <:actions>
-          <.button id="poll-now" phx-click="poll_now">
-            <.icon name="hero-arrow-path" class="size-4" /> Poll now
-          </.button>
-        </:actions>
-      </.header>
-
-      <div class="overflow-x-auto rounded-box border border-base-300">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Run</th>
-              <th>Issue</th>
-              <th>Status</th>
-              <th>PR</th>
-              <th>Updated</th>
-              <th><span class="sr-only">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody id="runs" phx-update="stream">
-            <tr id="runs-empty" class="hidden only:table-row">
-              <td colspan="6" class="py-8 text-center text-base-content/60">No runs yet.</td>
-            </tr>
-            <tr
-              :for={{dom_id, run} <- @streams.runs}
-              id={dom_id}
-              class={["hover:bg-base-200/60", @selected == run.id && "bg-base-200"]}
-            >
-              <td class="font-mono text-sm">
-                <.link navigate={~p"/runs/#{run.id}"} class="link link-hover">{run.id}</.link>
-              </td>
-              <td class="max-w-md truncate text-sm">{(run.issue_snapshot || %{})["summary"]}</td>
-              <td>
-                <.status_badge status={run.status} />
-                <div
-                  :if={run.status == :failed && run.error}
-                  class="mt-1 max-w-xs truncate text-xs text-error"
-                >
-                  {run.error}
-                </div>
-              </td>
-              <td>
-                <a
-                  :if={run.pr_url}
-                  href={run.pr_url}
-                  target="_blank"
-                  class="link link-primary text-sm"
-                >Open PR</a>
-              </td>
-              <td class="whitespace-nowrap text-xs text-base-content/60">
-                {format_time(run.updated_at)}
-              </td>
-              <td class="whitespace-nowrap text-right">
-                <button
-                  id={"log-#{run.id}"}
-                  phx-click="select"
-                  phx-value-id={run.id}
-                  class="btn btn-ghost btn-xs"
-                  title="Live log"
-                >
-                  <.icon name="hero-command-line" class="size-4" />
-                </button>
-                <button
-                  :if={Conductor.Runs.Run.terminal?(run)}
-                  id={"retry-#{run.id}"}
-                  phx-click="retry"
-                  phx-value-id={run.id}
-                  class="btn btn-ghost btn-xs"
-                >
-                  Retry
-                </button>
-                <button
-                  :if={not Conductor.Runs.Run.terminal?(run) and run.status != :handing_off}
-                  id={"abort-#{run.id}"}
-                  phx-click={show_modal("confirm-abort-#{run.id}")}
-                  class="btn btn-ghost btn-xs text-error"
-                >
-                  Abort
-                </button>
-                <.confirm_modal
-                  :if={not Conductor.Runs.Run.terminal?(run) and run.status != :handing_off}
-                  id={"confirm-abort-#{run.id}"}
-                  title={"Abort #{run.id}?"}
-                  confirm="Abort"
-                  on_confirm={JS.push("abort", value: %{id: run.id})}
-                >
-                  The agent stops and the run is marked as failed.
-                </.confirm_modal>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <section :if={@selected} class="card card-border card-sm border-base-300">
-        <div class="card-body">
-          <div class="flex items-center justify-between">
-            <h2 class="card-title text-sm">
-              Live log ·
-              <.link navigate={~p"/runs/#{@selected}"} class="link font-mono">{@selected}</.link>
-            </h2>
-            <div class="card-actions">
-              <button phx-click="select" phx-value-id="" class="btn btn-ghost btn-xs">Close</button>
-            </div>
-          </div>
-          <div id="log" phx-update="stream" class="max-h-96 overflow-y-auto font-mono text-xs">
-            <div id="log-empty" class="hidden py-2 text-base-content/50 only:block">
-              Waiting for activity…
-            </div>
-            <div :for={{dom_id, line} <- @streams.log} id={dom_id} class="flex gap-2 py-0.5">
-              <span class="shrink-0 text-base-content/50">{line.role}</span>
-              <span class={["break-all", line.class]}>{line.text}</span>
-            </div>
-          </div>
+    <Layouts.app flash={@flash} current_page={:runs} waiting_count={@waiting_count}>
+      <:actions>
+        <div
+          id="github-checked"
+          title={@last_poll && @last_poll.reason}
+          class="hidden items-center gap-1.5 text-xs text-fg-secondary sm:flex"
+        >
+          <span
+            id="github-checked-dot"
+            class={[
+              "size-1.5 rounded-full",
+              cond do
+                is_nil(@last_poll) -> "bg-dot-grey"
+                @last_poll.ok? -> "bg-dot-green"
+                true -> "bg-dot-red"
+              end
+            ]}
+          ></span>
+          {checked_text(@last_poll, @interval)}
         </div>
-      </section>
+        <button
+          id="poll-now"
+          type="button"
+          phx-click="poll_now"
+          title="Look for new issues to pick up without waiting for the next check"
+          class="btn btn-sm h-7 min-h-0 gap-1.5 border-line-strong bg-base-100 px-2.5 text-xs font-medium"
+        >
+          <.icon name="hero-arrow-path" class="size-3.5" />
+          <span class="sr-only sm:not-sr-only">Check GitHub</span>
+        </button>
+      </:actions>
+      <h1 id="runs-heading" class="sr-only">Runs</h1>
+      <%!-- Fills the window below the header (2.5rem and its border), so the footer sits at the bottom. --%>
+      <div class="flex min-h-[calc(100dvh-2.5rem-1px)] flex-col">
+        <div
+          id="runs-filters"
+          class="flex flex-wrap items-center gap-1 border-b border-base-300 bg-surface-2 px-3 py-2"
+        >
+          <div role="group" aria-label="Filter by status" class="flex flex-wrap gap-1">
+            <button
+              :for={{group, label, dot} <- filter_chips()}
+              id={"filter-#{group}"}
+              type="button"
+              phx-click="filter"
+              phx-value-status={group}
+              aria-pressed={to_string(@group == group)}
+              class={[
+                "inline-flex h-6 cursor-pointer items-center gap-[5px] rounded-full border px-2 text-xs transition-colors",
+                if(@group == group,
+                  do: "border-base-content bg-base-content text-base-100",
+                  else: "border-line-strong bg-base-100 hover:bg-row-hover"
+                )
+              ]}
+            >
+              <span :if={dot} class={["size-1.5 rounded-full", dot]}></span>
+              {label}
+              <span id={"filter-count-#{group}"} class="opacity-70">{@counts[group]}</span>
+            </button>
+          </div>
+          <div class="flex-1"></div>
+          <.form
+            for={to_form(%{"q" => @text}, as: :filter)}
+            id="runs-search-form"
+            phx-change="search"
+            phx-submit="search"
+            class="w-full sm:w-[220px]"
+          >
+            <label class="flex h-6 items-center gap-1.5 rounded border border-line-strong bg-base-100 px-2 text-fg-secondary">
+              <.icon name="hero-magnifying-glass-micro" class="size-3 shrink-0" />
+              <input
+                id="runs-search"
+                type="text"
+                name="filter[q]"
+                value={@text}
+                autocomplete="off"
+                aria-label="Filter runs"
+                placeholder="Filter by issue or run"
+                phx-debounce="250"
+                class="min-w-0 flex-1 border-0 bg-transparent p-0 text-xs text-base-content outline-0 placeholder:text-fg-secondary focus:ring-0"
+              />
+            </label>
+          </.form>
+        </div>
+        <div class="flex min-h-0 flex-1 flex-wrap">
+          <div
+            id="runs-table"
+            phx-hook=".RunsKeys"
+            tabindex="0"
+            aria-label="Runs. j and k move, Enter opens, l shows the live log"
+            class="relative min-w-0 flex-[999_1_640px] overflow-x-auto -outline-offset-2"
+          >
+            <table class="w-full border-collapse text-[13px]">
+              <thead>
+                <tr class="text-left text-[11px] uppercase tracking-[0.04em] text-fg-secondary *:border-b *:border-base-300 *:bg-surface-2 *:py-1.5 *:font-medium">
+                  <th class="px-3">Run</th>
+                  <th class="px-2">Issue</th>
+                  <th class="px-2">Status</th>
+                  <th class="px-2 text-right">Duration</th>
+                  <th class="px-2 text-right">Updated</th>
+                  <th class="px-3"><span class="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody id="runs" phx-update="stream">
+                <tr
+                  :for={{dom_id, run} <- @streams.runs}
+                  id={dom_id}
+                  data-status={run.status}
+                  class={[
+                    "h-[30px] border-b border-muted transition-colors hover:bg-row-hover data-cursor:bg-row-selected",
+                    cond do
+                      @selected == run.id -> "bg-row-selected"
+                      run.status == :waiting_for_input -> "bg-row-waiting"
+                      true -> nil
+                    end
+                  ]}
+                >
+                  <td class={[
+                    "whitespace-nowrap px-3 font-mono text-xs",
+                    run.status == :waiting_for_input && "shadow-[inset_3px_0_0_var(--dot-orange)]"
+                  ]}>
+                    <.link
+                      id={"open-#{run.id}"}
+                      navigate={~p"/runs/#{run.id}"}
+                      class="text-link hover:text-link-hover hover:underline"
+                    >{run.id}</.link>
+                  </td>
+                  <td class={[
+                    "max-w-[380px] truncate px-2",
+                    run.status == :waiting_for_input && "font-medium"
+                  ]}>
+                    {(run.issue_snapshot || %{})["summary"]}
+                  </td>
+                  <td class="whitespace-nowrap px-2">
+                    <.status_badge id={"status-#{run.id}"} status={run.status} />
+                    <a
+                      :if={run.pr_url}
+                      id={"pr-#{run.id}"}
+                      href={run.pr_url}
+                      target="_blank"
+                      class="ml-1.5 inline-flex items-center gap-[3px] align-middle text-xs text-link hover:text-link-hover hover:underline"
+                    >
+                      <.icon name="hero-arrow-top-right-on-square-micro" class="size-3" />
+                      {pr_label(run.pr_url)}
+                    </a>
+                    <.link
+                      :if={run.status == :waiting_for_input}
+                      id={"answer-#{run.id}"}
+                      navigate={~p"/runs/#{run.id}"}
+                      class="ml-1.5 inline-flex h-5 items-center rounded border border-dot-orange px-2 align-middle text-[11px] font-medium text-chip-warning-fg transition-colors hover:bg-chip-warning-bg"
+                    >
+                      Answer
+                    </.link>
+                    <span
+                      :if={run.status == :failed && run.error}
+                      id={"error-#{run.id}"}
+                      title={run.error}
+                      class="ml-1.5 inline-block max-w-xs truncate align-middle text-xs text-chip-error-fg"
+                    >
+                      {run.error}
+                    </span>
+                  </td>
+                  <td
+                    id={"duration-#{run.id}"}
+                    class={[
+                      "whitespace-nowrap px-2 text-right text-xs tabular-nums",
+                      if(under_way?(run), do: "text-base-content", else: "text-fg-secondary")
+                    ]}
+                  >
+                    {run_duration(run, @now)}
+                  </td>
+                  <td
+                    id={"updated-#{run.id}"}
+                    class="whitespace-nowrap px-2 text-right text-xs tabular-nums text-fg-secondary"
+                  >
+                    {local_time(run.updated_at)}
+                  </td>
+                  <td class="whitespace-nowrap py-0 pl-1 pr-2 text-right">
+                    <div class="inline-flex items-center gap-0.5">
+                      <button
+                        :if={run.status == :failed}
+                        id={"retry-#{run.id}"}
+                        type="button"
+                        phx-click="retry"
+                        phx-value-id={run.id}
+                        class="btn btn-ghost h-6 min-h-0 px-1.5 text-xs font-normal"
+                      >
+                        Retry
+                      </button>
+                      <button
+                        :if={not Run.terminal?(run) and run.status != :handing_off}
+                        id={"abort-#{run.id}"}
+                        type="button"
+                        phx-click={show_modal("confirm-abort-#{run.id}")}
+                        class="btn btn-ghost h-6 min-h-0 px-1.5 text-xs font-normal text-chip-error-fg"
+                      >
+                        Abort
+                      </button>
+                      <button
+                        id={"log-#{run.id}"}
+                        type="button"
+                        phx-click="select"
+                        phx-value-id={if @selected == run.id, do: "", else: run.id}
+                        aria-label={"Live log for #{run.id}"}
+                        aria-pressed={to_string(@selected == run.id)}
+                        title="Live log"
+                        class="btn btn-ghost size-6 min-h-0 p-0 text-fg-secondary aria-pressed:bg-muted aria-pressed:text-base-content"
+                      >
+                        <.icon name="hero-command-line-micro" class="size-3.5" />
+                      </button>
+                    </div>
+                    <.confirm_modal
+                      :if={not Run.terminal?(run) and run.status != :handing_off}
+                      id={"confirm-abort-#{run.id}"}
+                      title={"Abort #{run.id}?"}
+                      confirm="Abort"
+                      on_confirm={JS.push("abort", value: %{id: run.id})}
+                    >
+                      The agent stops and the run is marked as failed.
+                    </.confirm_modal>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p
+              :if={@shown_count == 0}
+              id="runs-empty"
+              class="px-3 py-6 text-center text-[13px] text-fg-secondary"
+            >
+              {if @total_count == 0, do: "No runs yet.", else: "No runs match this filter."}
+            </p>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".RunsKeys">
+              // The keyboard cursor lives on the client: a `data-cursor` attribute on one row.
+              // Moving it never touches the server. LiveView patches (stream inserts, resets)
+              // can drop the attribute, so a MutationObserver puts it back by run id, or on the
+              // nearest row when that run is gone, or on the first row.
+              const editable = (el) =>
+                el instanceof Element &&
+                el.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")
+
+              export default {
+                mounted() {
+                  this.cursorId = null
+                  this.cursorIndex = 0
+
+                  this.onKey = (event) => {
+                    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return
+                    if (editable(event.target) || document.querySelector("dialog[open]")) return
+
+                    const rows = this.rows()
+                    if (rows.length === 0) return
+
+                    switch (event.key) {
+                      case "j":
+                      case "ArrowDown":
+                        event.preventDefault()
+                        this.move(rows, 1)
+                        break
+                      case "k":
+                      case "ArrowUp":
+                        event.preventDefault()
+                        this.move(rows, -1)
+                        break
+                      case "Enter": {
+                        // A focused link or button handles Enter itself.
+                        if (event.target.closest("a, button, summary")) return
+                        const link = this.current(rows)?.querySelector("a[id^=open-]")
+                        if (link) { event.preventDefault(); link.click() }
+                        break
+                      }
+                      case "l": {
+                        const toggle = this.current(rows)?.querySelector("button[id^=log-]")
+                        if (toggle) { event.preventDefault(); toggle.click() }
+                        break
+                      }
+                    }
+                  }
+                  window.addEventListener("keydown", this.onKey)
+
+                  this.handleEvent("runs:reset-cursor", () => {
+                    this.cursorId = null
+                    this.cursorIndex = 0
+                    this.apply()
+                  })
+
+                  this.observer = new MutationObserver(() => this.apply())
+                  this.observer.observe(this.el, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ["data-cursor"]
+                  })
+                  this.apply()
+                },
+                updated() { this.apply() },
+                destroyed() {
+                  window.removeEventListener("keydown", this.onKey)
+                  this.observer.disconnect()
+                },
+                rows() { return Array.from(this.el.querySelectorAll("#runs > tr")) },
+                current(rows) {
+                  return rows.find((row) => row.id === this.cursorId) || rows[0]
+                },
+                move(rows, step) {
+                  const from = Math.max(rows.indexOf(this.current(rows)), 0)
+                  const to = Math.min(Math.max(from + step, 0), rows.length - 1)
+                  this.cursorId = rows[to].id
+                  this.cursorIndex = to
+                  this.apply()
+                  rows[to].scrollIntoView({block: "nearest"})
+                },
+                // Idempotent, so the observer does not loop on its own changes.
+                apply() {
+                  const rows = this.rows()
+                  if (rows.length === 0) return
+
+                  let row = rows.find((r) => r.id === this.cursorId)
+                  if (!row) {
+                    row = rows[Math.min(this.cursorIndex, rows.length - 1)]
+                    this.cursorId = row.id
+                  }
+                  this.cursorIndex = rows.indexOf(row)
+
+                  for (const r of rows) {
+                    if (r === row) {
+                      if (!r.hasAttribute("data-cursor")) r.setAttribute("data-cursor", "")
+                    } else if (r.hasAttribute("data-cursor")) {
+                      r.removeAttribute("data-cursor")
+                    }
+                  }
+                }
+              }
+            </script>
+          </div>
+
+          <section
+            :if={@selected}
+            id="live-log"
+            aria-label="Live log"
+            class="flex min-w-0 flex-[1_1_360px] flex-col border-t border-base-300 bg-base-100 lg:border-l lg:border-t-0"
+          >
+            <div class="flex h-8 items-center gap-1.5 border-b border-base-300 pl-3 pr-2">
+              <span class="size-1.5 rounded-full bg-dot-blue"></span>
+              <h2 class="text-xs font-semibold">Live log</h2>
+              <.link
+                navigate={~p"/runs/#{@selected}"}
+                class="font-mono text-xs text-link hover:text-link-hover hover:underline"
+              >{@selected}</.link>
+              <button
+                id="log-close"
+                type="button"
+                phx-click="select"
+                phx-value-id=""
+                aria-label="Close live log"
+                class="btn btn-ghost ml-auto size-6 min-h-0 p-0 text-fg-secondary"
+              >
+                <.icon name="hero-x-mark-micro" class="size-3.5" />
+              </button>
+            </div>
+            <div
+              id="log"
+              phx-update="stream"
+              class="max-h-72 min-h-0 flex-1 overflow-y-auto px-3 py-1.5 font-mono text-[11.5px] leading-normal lg:max-h-none"
+            >
+              <div id="log-empty" class="hidden text-fg-tertiary only:block">
+                Waiting for activity…
+              </div>
+              <div :for={{dom_id, line} <- @streams.log} id={dom_id} class="flex gap-2">
+                <span class="w-16 shrink-0 text-fg-tertiary">{line.role}</span>
+                <span class={["min-w-0 break-all", line.class]}>{line.text}</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer
+          id="runs-footer"
+          class="flex h-[26px] items-center gap-3 border-t border-base-300 bg-surface-2 px-3 text-[11px] text-fg-secondary"
+        >
+          <span id="runs-hints" class="flex items-center gap-3">
+            <span><kbd class="kbd kbd-xs">j</kbd> <kbd class="kbd kbd-xs">k</kbd> move</span>
+            <span><kbd class="kbd kbd-xs">↵</kbd> open</span>
+            <span><kbd class="kbd kbd-xs">l</kbd> live log</span>
+          </span>
+          <span class="flex-1"></span>
+          <span id="runs-count">{@shown_count} of {@total_count} runs</span>
+        </footer>
+      </div>
     </Layouts.app>
     """
   end
@@ -145,7 +439,15 @@ defmodule ConductorWeb.DashboardLive do
   @impl true
   def handle_event("poll_now", _params, socket) do
     if Process.whereis(Poller), do: Poller.poll_now()
-    {:noreply, put_flash(socket, :info, "Polling GitHub…")}
+    {:noreply, put_flash(socket, :info, "Checking GitHub for new issues…")}
+  end
+
+  def handle_event("filter", %{"status" => status}, socket) do
+    {:noreply, push_patch(socket, to: filter_path(parse_group(status), socket.assigns.text))}
+  end
+
+  def handle_event("search", %{"filter" => %{"q" => q}}, socket) do
+    {:noreply, push_patch(socket, to: filter_path(socket.assigns.group, q))}
   end
 
   def handle_event("select", %{"id" => id}, socket) do
@@ -155,9 +457,9 @@ defmodule ConductorWeb.DashboardLive do
 
     {:noreply,
      socket
-     |> assign(selected: selected)
+     |> assign(selected: selected, now: DateTime.utc_now())
      |> stream(:log, [], reset: true)
-     |> stream(:runs, Runs.list_runs())}
+     |> load_runs()}
   end
 
   def handle_event("retry", %{"id" => id}, socket) do
@@ -182,7 +484,26 @@ defmodule ConductorWeb.DashboardLive do
 
   @impl true
   def handle_info({:run_updated, run}, socket) do
-    socket = stream_insert(socket, :runs, run, at: if(new_run?(socket, run), do: 0, else: -1))
+    %{run_ids: run_ids, group: group, text: text} = socket.assigns
+    shown? = MapSet.member?(run_ids, run.id)
+
+    socket =
+      cond do
+        # A run inserted for the first time goes to the top; updates keep their place.
+        Runs.matches?(run, group, text) ->
+          socket
+          |> track_runs([run])
+          |> stream_insert(:runs, run, at: if(shown?, do: -1, else: 0))
+
+        # A run that left the filter goes; one that never was in it stays out.
+        shown? ->
+          socket |> untrack_run(run) |> stream_delete(:runs, run)
+
+        true ->
+          socket
+      end
+
+    socket = socket |> assign(now: DateTime.utc_now()) |> assign_counts()
 
     socket =
       if run.id == socket.assigns.selected,
@@ -190,6 +511,25 @@ defmodule ConductorWeb.DashboardLive do
         else: socket
 
     {:noreply, socket}
+  end
+
+  # Only the rows whose duration still grows are sent again.
+  def handle_info(:tick, socket) do
+    Process.send_after(self(), :tick, @tick)
+
+    runs =
+      Enum.filter(Runs.list_by_status(@under_way), &MapSet.member?(socket.assigns.run_ids, &1.id))
+
+    {:noreply,
+     Enum.reduce(
+       runs,
+       assign(socket, now: DateTime.utc_now()),
+       &stream_insert(&2, :runs, &1, at: -1)
+     )}
+  end
+
+  def handle_info({:polled, last_poll}, socket) do
+    {:noreply, assign(socket, :last_poll, last_poll)}
   end
 
   def handle_info({:agent_event, %{role: role, event: event}}, socket) do
@@ -232,9 +572,87 @@ defmodule ConductorWeb.DashboardLive do
     )
   end
 
-  # A run inserted for the first time goes to the top; updates keep their place.
-  defp new_run?(_socket, run), do: run.inserted_at == run.updated_at and run.status == :picked_up
+  # Reads the runs of the current filter again and resets the stream.
+  defp load_runs(socket) do
+    runs = Runs.filter_runs(socket.assigns.group, socket.assigns.text)
 
-  defp format_time(nil), do: ""
-  defp format_time(datetime), do: Calendar.strftime(datetime, "%d %b %H:%M")
+    socket
+    |> assign(run_ids: MapSet.new(runs, & &1.id))
+    |> assign_counts()
+    |> stream(:runs, runs, reset: true)
+  end
+
+  # The numbers are true counts from the database, not the length of the (capped) list on the page:
+  # the chips count per status group, the footer counts the runs of the filter against all runs.
+  defp assign_counts(socket) do
+    %{group: group, text: text} = socket.assigns
+    counts = Runs.group_counts()
+
+    assign(socket,
+      counts: counts,
+      shown_count: Runs.count_runs(group, text),
+      total_count: counts.all
+    )
+  end
+
+  # Streams cannot be counted, so the ids on the page are kept to tell a new run from an update.
+  defp track_runs(socket, runs) do
+    assign(socket, :run_ids, Enum.into(runs, socket.assigns.run_ids, & &1.id))
+  end
+
+  defp untrack_run(socket, run),
+    do: assign(socket, :run_ids, MapSet.delete(socket.assigns.run_ids, run.id))
+
+  defp parse_group(status) do
+    Enum.find(Runs.status_groups(), :all, &(Atom.to_string(&1) == status))
+  end
+
+  defp filter_path(group, text) do
+    params =
+      [
+        status: if(group != :all, do: group),
+        q: if(String.trim(text) != "", do: String.trim(text))
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    ~p"/?#{params}"
+  end
+
+  defp filter_chips do
+    [
+      {:all, "All", nil},
+      {:running, "Running", "bg-dot-blue"},
+      {:waiting, "Waiting for input", "bg-dot-orange"},
+      {:completed, "Completed", "bg-dot-green"},
+      {:failed, "Failed", "bg-dot-red"},
+      {:picked_up, "Picked up", "bg-dot-grey"}
+    ]
+  end
+
+  defp under_way?(run), do: run.status in @under_way
+
+  # The number of a pull request is the last segment of its URL.
+  defp pr_label(url) do
+    number = url |> String.trim_trailing("/") |> String.split("/") |> List.last()
+    if number =~ ~r/^\d+$/, do: "PR ##{number}", else: "PR"
+  end
+
+  defp checked_text(nil, _interval), do: "GitHub not checked yet"
+
+  defp checked_text(%{at: at}, interval),
+    do: ["GitHub checked ", local_time(at), interval_text(interval)]
+
+  defp interval_text(nil), do: ""
+  defp interval_text(60_000), do: " · every minute"
+
+  defp interval_text(ms) when rem(ms, 3_600_000) == 0,
+    do: " · every #{unit(div(ms, 3_600_000), "hour")}"
+
+  defp interval_text(ms) when rem(ms, 60_000) == 0,
+    do: " · every #{unit(div(ms, 60_000), "minute")}"
+
+  defp interval_text(ms), do: " · every #{unit(max(div(ms, 1000), 1), "second")}"
+
+  defp unit(1, name), do: name
+  defp unit(n, name), do: "#{n} #{name}s"
 end

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tidewave": {
+      "url": "http://127.0.0.1:4000/tidewave/mcp",
+      "description": "Phoenix runtime tools for Conductor: evaluate code, query the database, read documentation and logs"
+    }
+  }
+}

@@ -1,23 +1,81 @@
 defmodule ConductorWeb.RunComponents do
-  @moduledoc "Pieces shared by the run pages: status badges and transcript items."
+  @moduledoc "Pieces shared by the run pages: the status chip, durations and times, and transcript items."
   use Phoenix.Component
   import ConductorWeb.CoreComponents, only: [icon: 1]
 
-  attr :status, :atom, required: true
+  attr :status, :atom, required: true, doc: "a `Conductor.Runs.Run` status"
+  attr :id, :string, default: nil
+  attr :class, :any, default: nil
 
+  @doc """
+  The status of a run as a pill with a dot, in the colours of the status: under way (`provisioning`, `running`,
+  `handing_off`) info, `waiting_for_input` warning, `completed` success, `failed` error, anything else neutral.
+  The label is the status in words; `data-status` carries the status itself.
+  """
   def status_badge(assigns) do
     ~H"""
-    <span class={["badge badge-sm whitespace-nowrap", badge_class(@status)]}>
-      {String.replace(to_string(@status), "_", " ")}
+    <span
+      id={@id}
+      data-status={@status}
+      class={[
+        "badge h-5 gap-[5px] whitespace-nowrap border-0 px-[7px] align-middle text-[11px] font-medium",
+        badge_class(@status),
+        @class
+      ]}
+    >
+      <span class="size-[5px] rounded-full bg-current"></span>{status_label(@status)}
     </span>
     """
   end
 
-  defp badge_class(:completed), do: "badge-success"
-  defp badge_class(:failed), do: "badge-error"
-  defp badge_class(:waiting_for_input), do: "badge-warning"
-  defp badge_class(status) when status in ~w(running provisioning handing_off)a, do: "badge-info"
-  defp badge_class(_), do: "badge-ghost"
+  @doc "A run status in words: `:waiting_for_input` is \"waiting for input\"."
+  def status_label(status), do: String.replace(to_string(status), "_", " ")
+
+  defp badge_class(:completed), do: "bg-chip-success-bg text-chip-success-fg"
+  defp badge_class(:failed), do: "bg-chip-error-bg text-chip-error-fg"
+  defp badge_class(:waiting_for_input), do: "bg-chip-warning-bg text-chip-warning-fg"
+
+  defp badge_class(status) when status in ~w(running provisioning handing_off)a,
+    do: "bg-chip-info-bg text-chip-info-fg"
+
+  defp badge_class(_), do: "bg-muted text-fg-neutral"
+
+  @doc """
+  How long a run took, to the minute (`<1m`, `21m`, `1h 5m`): from when it was picked up to its last update once
+  it is finished, to `now` while it is under way. A run that has not started (`picked_up`) has none: `—`.
+  """
+  def run_duration(run, now \\ DateTime.utc_now())
+  def run_duration(%{status: :picked_up}, _now), do: "—"
+
+  def run_duration(%{status: status} = run, now) do
+    ended = if status in Conductor.Runs.Run.terminal_statuses(), do: run.updated_at, else: now
+    minutes(DateTime.diff(ended, run.inserted_at, :second))
+  end
+
+  defp minutes(seconds) when seconds < 60, do: "<1m"
+  defp minutes(seconds) when seconds < 3600, do: "#{div(seconds, 60)}m"
+  defp minutes(seconds), do: "#{div(seconds, 3600)}h #{rem(div(seconds, 60), 60)}m"
+
+  @doc """
+  A point in time as the page shows it, in the server's timezone: the time (`14:02`), and the date before it when
+  it is not today (`7 Oct 14:02`). Nothing for `nil`.
+  """
+  def local_time(nil), do: ""
+
+  def local_time(%DateTime{} = at) do
+    local =
+      at
+      |> DateTime.shift_zone!("Etc/UTC")
+      |> DateTime.to_naive()
+      |> NaiveDateTime.truncate(:second)
+      |> NaiveDateTime.to_erl()
+      |> :calendar.universal_time_to_local_time()
+      |> NaiveDateTime.from_erl!()
+
+    {today, _time} = :calendar.local_time()
+    today? = NaiveDateTime.to_date(local) == Date.from_erl!(today)
+    Calendar.strftime(local, if(today?, do: "%H:%M", else: "%-d %b %H:%M"))
+  end
 
   @doc "The DOM id of a persisted or live transcript item."
   def item_dom_id(conversation, entry),
@@ -36,9 +94,18 @@ defmodule ConductorWeb.RunComponents do
   @doc """
   What a list of transcript items shows: the agent's texts and, between them, what it did to get there. Its
   thinking and its tool calls are steps; the steps between two texts make one group (kind `steps`), also when
-  they come from several messages, and each tool result goes onto its call.
+  they come from several messages, and each tool result goes onto its call. The first thing it was told is marked
+  `first`: that is the issue.
   """
-  def transcript(items), do: items |> unfolded() |> fold_turns()
+  def transcript(items), do: items |> first_prompt() |> unfolded() |> fold_turns()
+
+  # The prompt a conversation starts with is the issue; what follows was sent by a human.
+  defp first_prompt(items) do
+    case Enum.find_index(items, &(&1.kind == "pi.user")) do
+      nil -> items
+      index -> List.update_at(items, index, &Map.put(&1, :first, true))
+    end
+  end
 
   defp unfolded(items) do
     results =
@@ -341,116 +408,133 @@ defmodule ConductorWeb.RunComponents do
 
   attr :from, :string, required: true, values: ~w(agent input)
   attr :text, :string, required: true
+  attr :first, :boolean, default: false, doc: "the prompt the conversation starts with: the issue"
 
   @doc """
-  A message of the conversation: what the agent was told (`input`), in a soft box at the far side, or what it says
-  (`agent`), as plain text across the width.
+  A message of the conversation: a square badge, who it is from, and the text. What the agent was told (`input`)
+  is the issue for the first prompt and you for the later ones; what it says (`agent`) is the agent.
   """
-  def chat_message(%{from: "input"} = assigns) do
+  def chat_message(assigns) do
+    assigns =
+      assign(assigns,
+        who:
+          case assigns do
+            %{from: "agent"} -> %{badge: "AG", label: "Agent", color: "bg-info text-info-content"}
+            %{first: true} -> %{badge: "IS", label: "Issue", color: "bg-muted text-fg-neutral"}
+            _ -> %{badge: "YOU", label: "You", color: "bg-muted text-fg-neutral"}
+          end
+      )
+
     ~H"""
-    <article data-from="input" class="flex justify-end py-2">
-      <span class="sr-only">Input</span>
-      <div class="max-w-[82%] rounded-2xl bg-base-200 px-4 py-2.5">
-        <div class="prose prose-sm">{markdown(@text)}</div>
+    <article data-from={@from} class="flex gap-2">
+      <div
+        data-badge
+        aria-hidden="true"
+        class={[
+          "flex size-6 shrink-0 items-center justify-center rounded-field text-[10px] font-semibold",
+          String.length(@who.badge) > 2 && "tracking-tighter",
+          @who.color
+        ]}
+      >
+        {@who.badge}
+      </div>
+      <div class="min-w-0 flex-1 pt-px">
+        <div data-label class="mb-px text-[11px] text-fg-secondary">{@who.label}</div>
+        <div class="prose prose-sm max-w-none text-[13px] leading-[1.45] text-base-content">
+          {markdown(@text)}
+        </div>
       </div>
     </article>
     """
   end
 
-  def chat_message(assigns) do
-    ~H"""
-    <article data-from="agent">
-      <span class="sr-only">Agent</span>
-      <div class="prose prose-sm max-w-none">{markdown(@text)}</div>
-    </article>
-    """
-  end
-
   attr :id, :string, default: nil
-  attr :icon, :string, required: true
   attr :text, :string, required: true
 
   attr :suffix, :string,
     default: nil,
     doc: "secondary text after the label, as the command of a tool call"
 
-  attr :note, :any, default: nil, doc: "a remark after the label, as what is kept inside"
-  attr :streaming, :boolean, default: false, doc: "still going on: the label shimmers"
+  attr :note, :any, default: nil, doc: "a remark after the label, as how much of it failed"
+  attr :meta, :string, default: nil, doc: "what stands at the far end, as how long it took"
+  attr :streaming, :boolean, default: false, doc: "still going on: a dot pulses before the label"
   attr :open, :boolean, default: false
-  attr :error, :boolean, default: false
-  slot :inner_block
+  slot :inner_block, required: true
 
   @doc """
-  A line of the transcript for what the agent does besides talking: a tool call, its thinking, a note. With
-  content it opens to show it; its icon then makes way for a chevron.
+  A line of the transcript for what the agent did besides talking: a chevron, what it was, and how long it took at
+  the far end. It opens to show what is inside.
   """
-  def row(%{inner_block: []} = assigns) do
-    ~H"""
-    <div id={@id} class={["flex min-w-0 items-center gap-1.5 text-sm", row_color(@error)]}>
-      <.icon name={@icon} class="size-4 shrink-0" />
-      <.row_label text={@text} suffix={@suffix} note={@note} streaming={@streaming} />
-    </div>
-    """
-  end
-
   def row(assigns) do
     ~H"""
-    <details id={@id} open={@open}>
+    <details id={@id} open={@open} class="rounded-field border border-base-300 bg-base-100">
       <summary class={[
-        "group/trigger flex min-w-0 cursor-pointer list-none items-center gap-1.5 rounded-sm text-sm",
-        "transition-colors hover:text-base-content [&::-webkit-details-marker]:hidden",
-        row_color(@error)
+        "flex h-[26px] min-w-0 cursor-pointer list-none items-center gap-1.5 rounded-field px-2 text-xs",
+        "text-fg-secondary transition-colors hover:text-base-content [&::-webkit-details-marker]:hidden"
       ]}>
-        <span class="relative size-4 shrink-0">
-          <.icon
-            name={@icon}
-            class="absolute inset-0 size-4 transition-opacity duration-200 [details[open]>summary_&]:opacity-0 group-hover/trigger:opacity-0"
-          />
-          <.icon
-            name="hero-chevron-down-micro"
-            class="absolute inset-0 size-4 opacity-0 transition-[rotate,opacity] duration-200 [details[open]>summary_&]:rotate-180 [details[open]>summary_&]:opacity-100 group-hover/trigger:opacity-100 motion-reduce:transition-none"
-          />
+        <.icon
+          name="hero-chevron-right-micro"
+          class="size-3 shrink-0 transition-transform duration-150 [details[open]>summary>&]:rotate-90 motion-reduce:transition-none"
+        />
+        <.pulse_dot :if={@streaming} class="size-1.5 bg-dot-blue" />
+        <span class="truncate">
+          <span data-row-text>{@text}</span>
+          <span :if={@suffix not in [nil, ""]} class="ms-1 font-mono text-[11.5px]">{@suffix}</span>
+          <span :if={@note not in [nil, false, ""]} data-row-note class="text-chip-error-fg">
+            · {@note}
+          </span>
         </span>
-        <.row_label text={@text} suffix={@suffix} note={@note} streaming={@streaming} />
+        <span class="flex-1"></span>
+        <span :if={@meta} data-row-meta class="shrink-0 tabular-nums text-fg-tertiary">{@meta}</span>
       </summary>
-      <div class="pt-2 text-sm text-base-content/60">{render_slot(@inner_block)}</div>
+      <div class="border-t border-base-300 p-2">{render_slot(@inner_block)}</div>
     </details>
     """
   end
 
-  attr :text, :string, required: true
-  attr :suffix, :string, default: nil
-  attr :note, :any, default: nil
-  attr :streaming, :boolean, default: false
+  attr :class, :any, default: nil
+  attr :pulse, :boolean, default: true
 
-  defp row_label(assigns) do
+  # A dot that pulses for what is going on now; it stays still for a reader who asked for less motion.
+  def pulse_dot(assigns) do
     ~H"""
-    <span class="truncate">
-      <span class={@streaming && "skeleton skeleton-text"}>{@text}</span>
-      <span :if={@suffix not in [nil, ""]} class="ms-1 font-mono text-xs opacity-70">{@suffix}</span>
-      <span :if={@note not in [nil, false, ""]} class="opacity-70">{@note}</span>
-    </span>
+    <span
+      data-pulse={@pulse}
+      class={["shrink-0 rounded-full", @pulse && "motion-safe:animate-dot-pulse", @class]}
+    ></span>
     """
   end
-
-  defp row_color(true), do: "text-error"
-  defp row_color(false), do: "text-base-content/60"
 
   attr :id, :string, default: nil
   attr :text, :string, required: true
   attr :streaming, :boolean, default: false
 
-  @doc "The agent's thinking. It is open for as long as the thinking streams in and closes once that is over."
+  @doc """
+  The agent's thinking. While it streams in, it shows as it comes, after a pulsing dot; once that is over it is a
+  line that opens.
+  """
+  def reasoning(%{streaming: true} = assigns) do
+    ~H"""
+    <div
+      id={@id}
+      data-thinking
+      class="flex items-start gap-2 rounded-field border border-dashed border-line-strong px-2 py-1.5 text-xs text-fg-secondary"
+    >
+      <.pulse_dot class="mt-1 size-1.5 bg-dot-blue" />
+      <div class="min-w-0 flex-1">
+        <span class="font-medium text-base-content">Thinking</span>
+        <div class="prose prose-sm max-h-52 max-w-none overflow-y-auto text-xs italic leading-[1.45] text-fg-secondary">
+          {markdown(@text)}
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   def reasoning(assigns) do
     ~H"""
-    <.row
-      id={@id}
-      icon="hero-light-bulb-micro"
-      text={if @streaming, do: "Thinking…", else: "Thought"}
-      streaming={@streaming}
-      open={@streaming}
-    >
-      <div class="prose prose-sm max-h-52 max-w-none overflow-y-auto text-base-content/60">
+    <.row id={@id} text="Thought">
+      <div class="prose prose-sm max-h-52 max-w-none overflow-y-auto text-xs leading-[1.45] text-fg-secondary">
         {markdown(@text)}
       </div>
     </.row>
@@ -467,52 +551,134 @@ defmodule ConductorWeb.RunComponents do
 
   attr :diff, :string, default: nil, doc: "what an edit changed, shown instead of its result"
   attr :streaming, :boolean, default: false, doc: "the tool is still running"
+  attr :done, :boolean, default: false, doc: "the tool has answered"
   attr :error, :boolean, default: false
 
+  attr :exit_code, :integer,
+    default: nil,
+    doc: "what a command that has ended exited with, see `exit_code/1`"
+
   @doc """
-  A tool call. Its line says what is called on what, the way pi does; it opens to show the whole call and what
-  came out of it: the output, the diff of an edit, the content of a file that was written.
+  A tool call, as a box. Its header says what is called on what, the way pi does, and at the far end how it went:
+  `running`, the exit code of a command, `done` or `failed`. Under it is what came out: the output, the diff of an
+  edit, the content of a file that was written.
   """
   def tool(assigns) do
+    call = tool_call(assigns.name, assigns.args)
+
     assigns =
       assign(assigns,
-        call: tool_call(assigns.name, assigns.args),
+        call: call,
+        # The header has one line; a call that takes more is shown whole under it.
+        line: call |> String.split("\n", parts: 2) |> hd(),
         output: clean(assigns.output),
         written: assigns.name == "write" && is_map(assigns.args) && assigns.args["content"],
-        diff: if(assigns.error, do: nil, else: assigns.diff)
+        diff: if(assigns.error, do: nil, else: assigns.diff),
+        status: tool_status(assigns)
       )
 
     ~H"""
-    <.row
-      :if={@call == "" and @output == ""}
+    <div
       id={@id}
-      icon={tool_icon(@name)}
-      text={@name}
-      streaming={@streaming}
-      error={@error}
-    />
-    <.row
-      :if={@call != "" or @output != ""}
-      id={@id}
-      icon={tool_icon(@name)}
-      text={@name}
-      suffix={@call}
-      streaming={@streaming}
-      open={@streaming and @output != ""}
-      error={@error}
+      data-tool={@name}
+      class={[
+        "overflow-hidden rounded-field border bg-base-100",
+        if(@error, do: "border-chip-error-line", else: "border-base-300")
+      ]}
     >
-      <div class="divide-y divide-base-300 rounded-box bg-base-200/60 px-3 font-mono text-xs *:py-2">
-        <pre :if={@call != ""} class="whitespace-pre-wrap break-all text-base-content/80">{@call}</pre>
-        <pre :if={@written} class="max-h-60 overflow-auto whitespace-pre-wrap break-all">{truncate(@written, 8000)}</pre>
-        <%!-- Kept on one line: inside a pre, the line breaks of the template would show between the lines. --%>
-        <pre :if={@diff} data-diff class="max-h-60 overflow-auto"><span :for={line <- diff_lines(@diff)} class={["block min-h-[1lh]", diff_color(line.sign)]}><span data-old class="inline-block w-[5ch] select-none text-right opacity-50">{line.old}</span><span data-new class="inline-block w-[5ch] select-none text-right opacity-50">{line.new}</span><span class="inline-block w-[3ch] select-none text-center">{line.sign}</span>{line.text}</span></pre>
-        <pre
-          :if={@output != "" and !@diff}
-          class="max-h-60 overflow-auto whitespace-pre-wrap break-all"
-        >{@output}</pre>
+      <div class="flex h-[26px] min-w-0 items-center gap-1.5 px-2 text-xs">
+        <.icon name={tool_icon(@name)} class="size-3 shrink-0 text-fg-secondary" />
+        <span data-tool-name class="shrink-0 font-mono">{@name}</span>
+        <span
+          :if={@line != ""}
+          data-tool-call
+          title={@call}
+          class="truncate font-mono text-fg-secondary"
+        >
+          {@line}
+        </span>
+        <span class="flex-1"></span>
+        <span
+          :if={@status}
+          data-tool-status={@status.state}
+          class={[
+            "inline-flex shrink-0 items-center gap-[5px] text-[11px] font-medium",
+            @status.color
+          ]}
+        >
+          <.pulse_dot pulse={@status.state == "running"} class="size-[5px] bg-current" />{@status.text}
+        </span>
       </div>
-    </.row>
+      <%!-- Each pre is kept on one line: inside a pre, the line breaks of the template would show. --%>
+      <pre :if={@line != @call} class={[tool_pre(), wrap()]}>{@call}</pre>
+      <pre :if={@written} class={[tool_pre(), wrap()]}>{truncate(@written, 8000)}</pre>
+      <pre :if={@diff} data-diff class={tool_pre()}><span :for={line <- diff_lines(@diff)} class={["block min-h-[1lh]", diff_color(line.sign)]}><span data-old class="inline-block w-[5ch] select-none text-right opacity-50">{line.old}</span><span data-new class="inline-block w-[5ch] select-none text-right opacity-50">{line.new}</span><span class="inline-block w-[3ch] select-none text-center">{line.sign}</span>{line.text}</span></pre>
+      <pre :if={@output != "" and !@diff} data-tool-output class={[tool_pre(), wrap()]}>{@output}</pre>
+    </div>
     """
+  end
+
+  # What a tool put out: Plex Mono at 11.5px, scrolling in its own box.
+  defp tool_pre,
+    do:
+      "m-0 max-h-60 overflow-auto border-t border-muted bg-surface-2 px-2 py-1.5 font-mono text-[11.5px] leading-[1.45] text-fg-pre"
+
+  defp wrap, do: "whitespace-pre-wrap break-all"
+
+  defp tool_status(%{streaming: true}),
+    do: %{state: "running", text: "running", color: "text-chip-info-fg"}
+
+  defp tool_status(%{exit_code: 0}),
+    do: %{state: "ok", text: "exit 0", color: "text-chip-success-fg"}
+
+  defp tool_status(%{exit_code: code}) when is_integer(code),
+    do: %{state: "error", text: "exit #{code}", color: "text-chip-error-fg"}
+
+  defp tool_status(%{error: true}),
+    do: %{state: "error", text: "failed", color: "text-chip-error-fg"}
+
+  defp tool_status(%{done: true}), do: %{state: "ok", text: "done", color: "text-chip-success-fg"}
+  defp tool_status(_assigns), do: nil
+
+  @doc """
+  What the command of a `bash` tool result exited with: 0 when it went well, and N when pi failed it with
+  "Command exited with code N", which the result carries as a diagnostic. Nothing for a command that ended some
+  other way (a timeout, an abort) and for the result of any other tool.
+  """
+  def exit_code(nil), do: nil
+
+  def exit_code(payload) do
+    message = message(payload)
+
+    cond do
+      message["toolName"] != "bash" -> nil
+      message["isError"] != true -> 0
+      true -> Enum.find_value(diagnostics(payload, message), &exited_with/1)
+    end
+  end
+
+  # The structured list of the entry or, without it, the block pi ends the content with for the model:
+  # "<harness>\n[error] Command exited with code 2\n</harness>". The output before it is the command's own.
+  defp diagnostics(payload, message) do
+    case payload["data"] do
+      %{"diagnostics" => [_ | _] = diagnostics} ->
+        for %{"message" => text} when is_binary(text) <- diagnostics, do: text
+
+      _ ->
+        with content when is_list(content) <- message["content"],
+             %{"type" => "text", "text" => "<harness>\n" <> block} <- List.last(content) do
+          for line <- String.split(block, "\n"), do: String.replace(line, ~r/^\[\w+\] /, "")
+        else
+          _ -> []
+        end
+    end
+  end
+
+  defp exited_with(text) do
+    case Regex.run(~r/\ACommand exited with code (-?\d+)\z/, text) do
+      [_, code] -> String.to_integer(code)
+      nil -> nil
+    end
   end
 
   defp diff_color("+"), do: "text-success"
@@ -557,6 +723,14 @@ defmodule ConductorWeb.RunComponents do
   attr :id, :string, required: true
   attr :placeholder, :string, default: nil
 
+  attr :label, :string,
+    default: nil,
+    doc: "the label of the field when no header is one; it is not shown"
+
+  attr :submit, :string, default: "Send", doc: "what the submit button says"
+  attr :accent, :boolean, default: false, doc: "the submit button stands out, as for a question"
+  attr :hint, :string, default: nil, doc: "a line under the field"
+
   attr :disabled, :boolean,
     default: false,
     doc: "there is nothing to say now, as before the agent starts"
@@ -564,43 +738,41 @@ defmodule ConductorWeb.RunComponents do
   attr :on_stop, :any, default: nil, doc: "what the stop button does; without it there is none"
 
   attr :rest, :global, include: ~w(phx-submit)
-  slot :header, doc: "what the prompt is for, as the question it answers"
+
+  slot :header,
+    doc: "what the prompt is for, as the question it answers; its label points at the field"
+
   slot :inner_block, doc: "hidden fields to send along"
 
   @doc """
-  The prompt under a transcript: a text that grows with what is typed, sent with Enter (Shift+Enter starts a new
-  line; Escape leaves the field). While the agent works there is a button to stop it as well.
+  The prompt under a transcript, a bar across the page: a field that grows with what is typed, sent with Enter
+  (Shift+Enter starts a new line; Escape leaves the field). While the agent works there is a button to stop it as well.
   """
   def chat_prompt(assigns) do
     ~H"""
-    <form
-      id={@id}
-      phx-hook=".ChatPrompt"
-      class="mx-auto flex w-full max-w-4xl flex-col gap-2 rounded-2xl border border-base-300 bg-base-100 px-2.5 py-2 transition-colors has-[textarea:focus-visible]:border-primary"
-      {@rest}
-    >
-      <div :if={@header != []} data-prompt-header class="px-1.5 pt-1 text-sm">
+    <form id={@id} phx-hook=".ChatPrompt" class="flex w-full flex-col gap-1.5" {@rest}>
+      <div :if={@header != []} data-prompt-header>
         {render_slot(@header)}
       </div>
       {render_slot(@inner_block)}
-      <textarea
-        id={"#{@id}-text"}
-        name="text"
-        rows="1"
-        required
-        disabled={@disabled}
-        placeholder={@placeholder}
-        aria-label={@placeholder}
-        class="textarea textarea-ghost max-h-48 min-h-0 w-full resize-none px-1.5 py-1 focus:bg-transparent focus:outline-none disabled:bg-transparent"
-      ></textarea>
-      <div class="flex items-center justify-end gap-1.5">
+      <div class="flex items-end gap-1.5">
+        <label :if={@label} for={"#{@id}-text"} class="sr-only">{@label}</label>
+        <textarea
+          id={"#{@id}-text"}
+          name="text"
+          rows="1"
+          required
+          disabled={@disabled}
+          placeholder={@placeholder}
+          class="max-h-48 min-h-7 min-w-0 flex-1 resize-none rounded border border-line-strong bg-base-100 px-2 py-1 text-[13px] leading-[18px] text-base-content outline-none transition-colors placeholder:text-fg-tertiary focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
+        ></textarea>
         <button
           :if={@on_stop}
           type="button"
           id={"#{@id}-stop"}
           phx-click={@on_stop}
           aria-label="Stop"
-          class="btn btn-circle btn-soft btn-sm"
+          class="btn btn-sm h-7 min-h-0 border-line-strong bg-base-100 px-2"
         >
           <.icon name="hero-stop-micro" class="size-4" />
         </button>
@@ -609,12 +781,15 @@ defmodule ConductorWeb.RunComponents do
           type="submit"
           id={"#{@id}-submit"}
           disabled={@disabled}
-          aria-label="Send"
-          class="btn btn-circle btn-primary btn-sm"
+          class={[
+            "btn btn-sm h-7 min-h-0 px-3 text-xs font-medium",
+            if(@accent, do: "btn-primary", else: "border-line-strong bg-base-100")
+          ]}
         >
-          <.icon name="hero-arrow-up-micro" class="size-4" />
+          {@submit}
         </button>
       </div>
+      <p :if={@hint} id={"#{@id}-hint"} class="text-[11px] text-fg-secondary">{@hint}</p>
     </form>
     <script :type={Phoenix.LiveView.ColocatedHook} name=".ChatPrompt">
       export default {
@@ -662,7 +837,7 @@ defmodule ConductorWeb.RunComponents do
 
   def transcript_item(%{item: %{kind: "pi.user"}} = assigns) do
     ~H"""
-    <.chat_message from="input" text={message_text(@item.payload)} />
+    <.chat_message from="input" text={message_text(@item.payload)} first={@item[:first] == true} />
     """
   end
 
@@ -684,29 +859,18 @@ defmodule ConductorWeb.RunComponents do
   # The group says what was done in it, or what is being done while the agent is at work there; it stays closed.
   def transcript_item(%{item: %{kind: "steps"}} = assigns) do
     %{steps: steps, active: active} = assigns.item
-    failed = Enum.count(steps, &(&1.type == :tool and result_error?(&1.result)))
     running = active && Enum.find(Enum.reverse(steps), &(&1.type == :tool and &1.result == nil))
 
     assigns =
       assign(assigns,
         text: if(active, do: activity(running), else: summary(steps)),
         suffix: running && tool_call(running.name, running.args),
-        note:
-          Enum.join(
-            ["· #{length(steps)} steps"] ++ if(failed > 0, do: ["· #{failed} failed"], else: []),
-            " "
-          )
+        note: failed(steps)
       )
 
     ~H"""
-    <.row
-      icon="hero-queue-list-micro"
-      text={@text}
-      suffix={@suffix || nil}
-      note={@note}
-      streaming={@item.active}
-    >
-      <div data-steps class="space-y-1.5 border-s border-base-300 ps-3">
+    <.row text={@text} suffix={@suffix || nil} note={@note} streaming={@item.active}>
+      <div data-steps class="space-y-1.5">
         <.step :for={step <- @item.steps} step={step} active={@item.active} />
       </div>
     </.row>
@@ -715,20 +879,11 @@ defmodule ConductorWeb.RunComponents do
 
   def transcript_item(%{item: %{kind: "work"}} = assigns) do
     steps = for %{kind: "steps", steps: steps} <- assigns.item.parts, step <- steps, do: step
-    failed = Enum.count(steps, &(&1.type == :tool and result_error?(&1.result)))
-
-    note =
-      ["· #{length(steps)} steps"] ++ if(failed > 0, do: ["· #{failed} failed"], else: [])
-
-    assigns = assign(assigns, note: Enum.join(note, " "))
+    assigns = assign(assigns, text: summary(steps), note: failed(steps))
 
     ~H"""
-    <.row
-      icon="hero-check-circle-micro"
-      text={if @item.ms, do: "Worked for #{duration(@item.ms)}", else: "Worked"}
-      note={@note}
-    >
-      <div data-work class="space-y-4 border-s border-base-300 ps-3">
+    <.row text={@text} note={@note} meta={@item.ms && duration(@item.ms)}>
+      <div data-work class="space-y-1.5">
         <.transcript_item :for={part <- @item.parts} item={part} />
       </div>
     </.row>
@@ -737,7 +892,7 @@ defmodule ConductorWeb.RunComponents do
 
   def transcript_item(%{item: %{kind: "error"}} = assigns) do
     ~H"""
-    <div class="text-sm text-error">{@item.text}</div>
+    <div data-error class="text-xs text-chip-error-fg">{@item.text}</div>
     """
   end
 
@@ -747,27 +902,48 @@ defmodule ConductorWeb.RunComponents do
       name={"#{message(@item.payload)["toolName"]} result"}
       output={result_text(@item.payload)}
       error={result_error?(@item.payload)}
+      exit_code={exit_code(@item.payload)}
+      done
     />
     """
   end
 
+  # A note says what Conductor did; what it has to show for it (as the output of the setup) opens under the line.
   def transcript_item(%{item: %{kind: "conductor.note"}} = assigns) do
     ~H"""
-    <.row icon="hero-information-circle-micro" text={@item.payload["title"]}>
-      <pre class="max-h-96 overflow-auto whitespace-pre-wrap rounded-box bg-base-200/60 p-3 font-mono text-xs">{truncate(@item.payload["text"], 8000)}</pre>
-    </.row>
+    <.rule :if={@item.payload["text"] in [nil, ""]} text={@item.payload["title"]} />
+    <details :if={@item.payload["text"] not in [nil, ""]} data-note>
+      <summary class="cursor-pointer list-none rounded-field transition-colors hover:text-base-content [&::-webkit-details-marker]:hidden">
+        <.rule text={@item.payload["title"]} />
+      </summary>
+      <pre class={[tool_pre(), wrap(), "mt-1.5 max-h-96! rounded-field border border-base-300!"]}>{truncate(@item.payload["text"], 8000)}</pre>
+    </details>
     """
   end
 
   def transcript_item(%{item: %{kind: "pi.compaction"}} = assigns) do
     ~H"""
-    <div class="divider text-xs text-base-content/50">context compacted</div>
+    <.rule text="context compacted" />
     """
   end
 
   def transcript_item(assigns) do
     ~H"""
-    <div class="text-xs text-base-content/50">{@item.kind}</div>
+    <div class="text-[11px] text-fg-tertiary">{@item.kind}</div>
+    """
+  end
+
+  attr :text, :string, required: true
+
+  # Something that happened between the messages: a centred line with a rule on both sides.
+  defp rule(assigns) do
+    ~H"""
+    <div
+      data-rule
+      class="divider m-0 h-auto gap-2 text-[11px] text-fg-tertiary before:h-px before:bg-base-300 after:h-px after:bg-base-300"
+    >
+      {@text}
+    </div>
     """
   end
 
@@ -791,33 +967,63 @@ defmodule ConductorWeb.RunComponents do
       output={result_text(@step.result)}
       diff={@step.result && message(@step.result)["details"]["diff"]}
       error={result_error?(@step.result)}
+      exit_code={exit_code(@step.result)}
+      done={@step.result != nil}
       streaming={@active and @step.result == nil}
     />
     """
+  end
+
+  defp failed(steps) do
+    case Enum.count(steps, &(&1.type == :tool and result_error?(&1.result))) do
+      0 -> nil
+      count -> "#{count} failed"
+    end
   end
 
   defp duration(ms) when ms < 60_000, do: "#{max(div(ms, 1000), 1)}s"
   defp duration(ms) when ms < 3_600_000, do: "#{div(ms, 60_000)}m #{rem(div(ms, 1000), 60)}s"
   defp duration(ms), do: "#{div(ms, 3_600_000)}h #{rem(div(ms, 60_000), 60)}m"
 
-  # What a group of steps was for: its most frequent kinds of tool call.
+  # What was done in a group of steps, in the order it was first done: "Thought, read 4 files, ran 2 commands".
   defp summary(steps) do
-    kinds =
-      for(%{type: :tool, name: name} <- steps, do: done(name))
-      |> Enum.frequencies()
-      |> Enum.sort_by(fn {kind, count} -> {-count, kind} end)
-      |> Enum.take(3)
-      |> Enum.map(&elem(&1, 0))
+    thought = if Enum.any?(steps, &(&1.type == :thinking)), do: ["thought"], else: []
+    tools = for %{type: :tool} = step <- steps, do: {done(step.name), step}
 
-    if kinds == [], do: "Thought", else: kinds |> Enum.join(", ") |> String.capitalize()
+    done =
+      for kind <- tools |> Enum.map(&elem(&1, 0)) |> Enum.uniq() do
+        counted(kind, for({^kind, step} <- tools, do: step))
+      end
+
+    case thought ++ done do
+      [] -> "Worked"
+      [first | rest] -> Enum.join([String.capitalize(first) | rest], ", ")
+    end
   end
 
-  defp done("bash"), do: "ran commands"
-  defp done("read"), do: "read files"
-  defp done(name) when name in ~w(edit write), do: "edited files"
-  defp done("set_issue_status"), do: "updated the issue status"
-  defp done("run_subagents"), do: "ran subagents"
-  defp done(_name), do: "used tools"
+  defp done("bash"), do: :ran
+  defp done("read"), do: :read
+  defp done(name) when name in ~w(edit write), do: :edited
+  defp done("set_issue_status"), do: :status
+  defp done("run_subagents"), do: :subagents
+  defp done(_name), do: :used
+
+  defp counted(:ran, steps), do: "ran #{count(length(steps), "command")}"
+  defp counted(:read, steps), do: "read #{count(files(steps), "file")}"
+  defp counted(:edited, steps), do: "edited #{count(files(steps), "file")}"
+  defp counted(:status, _steps), do: "updated the issue status"
+  defp counted(:subagents, _steps), do: "ran subagents"
+  defp counted(:used, steps), do: "used #{count(length(steps), "tool")}"
+
+  # A file that was read twice is one file.
+  defp files(steps) do
+    steps
+    |> Enum.uniq_by(fn step -> (is_map(step.args) && step.args["path"]) || step.id end)
+    |> length()
+  end
+
+  defp count(1, noun), do: "1 #{noun}"
+  defp count(number, noun), do: "#{number} #{noun}s"
 
   defp activity(%{name: "bash"}), do: "Running commands"
   defp activity(%{name: "read"}), do: "Reading files"

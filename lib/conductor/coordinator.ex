@@ -260,8 +260,11 @@ defmodule Conductor.Coordinator do
          {:ok, run} <- Runs.set_workspace_path(run, %{workspace_path: ws.path}),
          {:ok, run} <- Runs.set_branch(run, %{branch: ws.branch}),
          :ok <- record_setup(run, ws.setup_output),
+         # A run that is provisioned again keeps the models it started with: the runner still has them, and the
+         # settings may have changed since.
          models when is_map(models) <-
-           Config.run_models(Config.get_settings()) || {:error, "no head model configured"},
+           run.models || Config.run_models(Config.get_settings()) ||
+             {:error, "no head model configured"},
          prompt = Prompt.render(run.issue_snapshot, project, ws.branch, ws.base),
          command = %{
            type: "start_run",
@@ -273,7 +276,8 @@ defmodule Conductor.Coordinator do
          },
          # Setup is complete before start_run can emit events. Its reply and first
          # run_state can arrive together, so advancing after the reply loses input events.
-         _ <- Runs.provision_end(Runs.get_run!(run_id)),
+         # The models are kept on the run in the step that sends them.
+         _ <- Runs.provision_end(Runs.get_run!(run_id), %{models: models}),
          {:ok, _} <- Runner.call(command) do
       case Runs.get_run!(run_id) do
         %Run{status: :failed} -> Runner.call(%{type: "abort", run_id: run_id})
