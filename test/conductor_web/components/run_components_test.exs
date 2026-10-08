@@ -97,6 +97,64 @@ defmodule ConductorWeb.RunComponentsTest do
     }
   end
 
+  test "context actions retain assistant and tool-result entries when steps are folded" do
+    assistant =
+      item(7, %{
+        "id" => 1,
+        "kind" => "pi.assistant",
+        "model" => [
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{
+                "type" => "toolCall",
+                "id" => "t1",
+                "name" => "bash",
+                "arguments" => %{"command" => "ls"}
+              }
+            ]
+          }
+        ]
+      })
+
+    result_item = item(7, result("bash", "files"))
+
+    next =
+      item(7, %{
+        "id" => 3,
+        "kind" => "pi.assistant",
+        "model" => [
+          %{
+            "role" => "assistant",
+            "content" => [%{"type" => "thinking", "thinking" => "next step"}]
+          }
+        ]
+      })
+
+    {[group], _} = transcript([assistant, result_item, next])
+    html = show(group)
+
+    for id <- [1, 2, 3] do
+      assert found?(
+               html,
+               "button[phx-click=inspect_context][phx-value-conversation='7'][phx-value-entry='#{id}']"
+             )
+    end
+
+    # Synthetic/live-only rows have no persisted entry to inspect.
+    refute found?(
+             show(%{id: "live", kind: "text", text: "Streaming"}),
+             "button[phx-click=inspect_context]"
+           )
+  end
+
+  test "reset and compaction entries can be inspected" do
+    for kind <- ["pi.reset", "pi.compaction"] do
+      html = show(item(8, %{"id" => 4, "kind" => kind}))
+      assert found?(html, "#inspect-ev-8-e-4-4[phx-value-conversation='8'][phx-value-entry='4']")
+    end
+  end
+
   describe "recorded execution timings" do
     test "tool timing includes zero and subsecond executions; old and invalid results omit it" do
       for {ms, expected} <- [{0, "0ms"}, {125, "125ms"}, {1250, "1.3s"}, {61_000, "1m 1s"}] do

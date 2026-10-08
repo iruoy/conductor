@@ -1,6 +1,6 @@
 defmodule ConductorWeb.RunLive do
   use ConductorWeb, :live_view
-  alias Conductor.{Coordinator, Runs}
+  alias Conductor.{Coordinator, Runner, Runs}
   alias Conductor.Runs.Run
 
   @tool_output_max 4000
@@ -16,7 +16,7 @@ defmodule ConductorWeb.RunLive do
      |> assign(page_title: run.id, run: run, conversations: conversations)
      |> assign(attempts: Runs.other_attempts(run), history: Runs.status_history(id))
      |> assign(inbox: [], sent: %{}, models: Runs.conversation_models(id))
-     |> assign(ends: Runs.conversation_ends(id))
+     |> assign(ends: Runs.conversation_ends(id), inspection: nil)
      |> assign_questions()
      |> select(default_conversation(conversations))}
   end
@@ -62,6 +62,66 @@ defmodule ConductorWeb.RunLive do
             {label}
           </button>
         </div>
+
+        <.focus_wrap
+          :if={@inspection}
+          id="context-inspection"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="context-title"
+          phx-window-keydown="close_context"
+          phx-key="Escape"
+          class="fixed inset-x-3 top-16 bottom-6 z-50 mx-auto flex max-w-4xl flex-col gap-3 rounded-box border border-base-300 bg-base-100 p-5 shadow-2xl"
+        >
+          <div class="flex items-center justify-between gap-3">
+            <h2 id="context-title" class="font-semibold">Reconstructed model context</h2>
+            <button id="context-close" phx-click="close_context" class="btn btn-sm btn-ghost">Close</button>
+          </div>
+          <p class="text-sm">
+            {context_label(@conversations, @inspection.conversation)} · conversation {@inspection.conversation} · through entry #{@inspection.entry} (inclusive)
+          </p>
+          <p class="text-xs text-fg-secondary">
+            Reconstructed from persisted history, not hidden reasoning or a byte-for-byte provider request capture.
+            Thinking blocks and recognized credentials are omitted or redacted. Other sensitive content may remain;
+            keep this view private. Nothing is submitted, forked or published.
+          </p>
+          <p :if={@inspection.loading} id="context-loading" role="status">Loading context…</p>
+          <p :if={@inspection.error} id="context-error" role="alert">
+            Historical context is unavailable. The conversation or entry may no longer exist.
+          </p>
+          <%= if @inspection.page do %>
+            <p :if={@inspection.page["head"]} id="context-head" class="text-xs text-fg-secondary">
+              Active context marker: {@inspection.page["head"]["kind"]} entry #{@inspection.page[
+                "head"
+              ]["id"]}
+            </p>
+            <p class="text-xs text-fg-secondary">
+              Reconstructed messages (JSON excerpt) · Characters {@inspection.page["offset"] + 1}–{@inspection.page[
+                "next_offset"
+              ] || @inspection.page["total"]} of {@inspection.page["total"]}
+            </p>
+            <pre
+              id="context-content"
+              class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all rounded border border-base-300 bg-base-200 p-3 text-xs"
+            >{@inspection.page["text"]}</pre>
+            <div class="flex gap-2">
+              <button
+                :if={@inspection.page["offset"] > 0}
+                id="context-previous"
+                phx-click="context_page"
+                phx-value-offset={max(0, @inspection.page["offset"] - 16_000)}
+                class="btn btn-sm"
+              >Previous</button>
+              <button
+                :if={@inspection.page["next_offset"]}
+                id="context-next"
+                phx-click="context_page"
+                phx-value-offset={@inspection.page["next_offset"]}
+                class="btn btn-sm"
+              >Next</button>
+            </div>
+          <% end %>
+        </.focus_wrap>
 
         <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
           <%!-- The scroller centres its content with room for a wide page; here it starts at the left, as wide as
@@ -496,6 +556,28 @@ defmodule ConductorWeb.RunLive do
     {:noreply, select(socket, String.to_integer(conversation))}
   end
 
+  def handle_event("inspect_context", %{"conversation" => conversation, "entry" => entry}, socket) do
+    with {conversation, ""} <- Integer.parse(conversation),
+         {entry, ""} <- Integer.parse(entry) do
+      {:noreply, load_context(socket, conversation, entry, 0)}
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Invalid context entry")}
+    end
+  end
+
+  def handle_event("close_context", _params, socket) do
+    {:noreply, socket |> cancel_async(:context_inspection) |> assign(inspection: nil)}
+  end
+
+  def handle_event("context_page", %{"offset" => offset}, socket) do
+    with %{conversation: conversation, entry: entry} <- socket.assigns.inspection,
+         {offset, ""} when offset >= 0 <- Integer.parse(offset) do
+      {:noreply, load_context(socket, conversation, entry, offset)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   def handle_event("answer", %{"qid" => qid, "text" => text}, socket) do
     case Coordinator.answer(socket.assigns.run.id, qid, String.trim(text)) do
       {:ok, _} ->
@@ -536,6 +618,45 @@ defmodule ConductorWeb.RunLive do
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Cannot retry: #{inspect(reason)}")}
+    end
+  end
+
+  defp load_context(socket, conversation, entry, offset) do
+    run_id = socket.assigns.run.id
+
+    socket
+    |> cancel_async(:context_inspection)
+    |> assign(
+      inspection: %{
+        conversation: conversation,
+        entry: entry,
+        loading: true,
+        error: false,
+        page: nil
+      }
+    )
+    |> start_async(:context_inspection, fn ->
+      Runner.call(%{
+        type: "inspect_context",
+        run_id: run_id,
+        conversation: conversation,
+        entry: entry,
+        offset: offset
+      })
+    end)
+  end
+
+  @impl true
+  def handle_async(:context_inspection, result, socket) do
+    case {socket.assigns.inspection, result} do
+      {nil, _} ->
+        {:noreply, socket}
+
+      {inspection, {:ok, {:ok, page}}} ->
+        {:noreply, assign(socket, inspection: %{inspection | loading: false, page: page})}
+
+      {inspection, _} ->
+        {:noreply, assign(socket, inspection: %{inspection | loading: false, error: true})}
     end
   end
 
@@ -867,6 +988,13 @@ defmodule ConductorWeb.RunLive do
   end
 
   # A subtask's tab is its issue number (`sub:#12` is `#12`); one that ran more than once also counts its attempts.
+  defp context_label(conversations, conversation) do
+    case List.keyfind(tab_labels(conversations), conversation, 0) do
+      {_, label} -> label
+      nil -> "Unknown conversation"
+    end
+  end
+
   defp tab_labels(conversations) do
     attempts = Enum.frequencies_by(conversations, &elem(&1, 1))
 

@@ -15,6 +15,67 @@ defmodule ConductorWeb.RunLiveTest do
     %{project: project}
   end
 
+  test "inspects head and subagent entries safely while the transcript keeps updating", %{
+    conn: conn,
+    project: project
+  } do
+    run = run_fixture(project, "inspect-38", %{status: :running})
+
+    ingest = fn conversation, role, id, text ->
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => conversation,
+        "role" => role,
+        "event" => %{
+          "type" => "message_end",
+          "entry" => %{
+            "id" => id,
+            "kind" => "pi.user",
+            "model" => [%{"role" => "user", "content" => text}]
+          }
+        }
+      })
+    end
+
+    ingest.(4, "head", 1, "Head prompt")
+    ingest.(5, "sub:child", 2, "Child prompt")
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+
+    element(view, "#inspect-ev-4-e-1-1") |> render_click()
+    render_async(view, 5_000)
+    assert has_element?(view, "#context-content", "reconstructed 4:1")
+    refute has_element?(view, "#context-content script")
+    assert has_element?(view, "#tab-4[aria-selected=true]")
+
+    ingest.(4, "head", 3, "Continued while inspecting")
+
+    eventually(fn ->
+      assert has_element?(view, "#items-ev-4-e-3", "Continued while inspecting")
+    end)
+
+    assert has_element?(view, "#context-content", "reconstructed 4:1")
+    element(view, "#context-next") |> render_click()
+    render_async(view, 5_000)
+    assert has_element?(view, "#context-content", "second page")
+    element(view, "#context-close") |> render_click()
+    refute has_element?(view, "#context-inspection")
+    assert has_element?(view, "#items-ev-4-e-3")
+
+    element(view, "#tab-5") |> render_click()
+    element(view, "#inspect-ev-5-e-2-2") |> render_click()
+    render_async(view, 5_000)
+    assert has_element?(view, "#context-content", "reconstructed 5:2")
+    assert has_element?(view, "#tab-5[aria-selected=true]")
+
+    render_click(view, "inspect_context", %{"conversation" => "5", "entry" => "999"})
+    render_async(view, 5_000)
+    assert has_element?(view, "#context-error")
+    refute has_element?(view, "#context-content")
+    element(view, "#context-close") |> render_click()
+    refute has_element?(view, "#context-inspection")
+  end
+
   test "shows the transcript and sends answers to the runner", %{conn: conn, project: project} do
     {:ok, _} = Coordinator.enqueue(project, "shop-2", snapshot("shop-2", "Ask [fake:ask]"))
     assert_receive {:run_updated, %{id: "shop-2-1", status: :waiting_for_input}}, 10_000

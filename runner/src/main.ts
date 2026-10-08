@@ -20,9 +20,11 @@ mkdirSync(dataDir, { recursive: true });
 // Two runners writing one store corrupt it, so this one waits until the previous one is gone.
 await lockfile.lock(dataDir, { retries: { retries: 40, minTimeout: 500, maxTimeout: 500 } });
 
+const credentials = new FileCredentialStore();
 const runner = await Runner.open({
 	storage: await openNodeSqliteStorage(join(dataDir, "durable.sqlite")),
-	models: builtinModels({ credentials: new FileCredentialStore() }),
+	models: builtinModels({ credentials }),
+	inspectionSecrets: () => credentials.redactionValues(),
 	emit: write,
 });
 
