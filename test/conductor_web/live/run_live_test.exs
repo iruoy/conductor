@@ -15,6 +15,26 @@ defmodule ConductorWeb.RunLiveTest do
     %{project: project}
   end
 
+  test "empty setup output does not create a Conductor tab, but real logs remain accessible", %{
+    conn: conn,
+    project: project
+  } do
+    run = run_fixture(project, "setup-38", %{status: :running})
+    Runs.record_note(run.id, "setup", %{"title" => "Setup script", "text" => " \n\t"})
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+    refute has_element?(view, "#tab-0")
+    refute has_element?(view, "[data-note]")
+
+    Runs.record_note(run.id, "setup", %{
+      "title" => "Setup script",
+      "text" => "Installed dependencies"
+    })
+
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+    assert has_element?(view, "#tab-0")
+    assert has_element?(view, "[data-note] pre", "Installed dependencies")
+  end
+
   test "head and subagent transcripts omit context debug UI", %{
     conn: conn,
     project: project

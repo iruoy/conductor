@@ -318,8 +318,11 @@ defmodule Conductor.Coordinator do
 
   defp record_setup(_run, nil), do: :ok
 
-  defp record_setup(run, output),
-    do: Runs.record_note(run.id, "setup", %{"title" => "Setup script", "text" => output})
+  defp record_setup(run, output) do
+    if String.trim(output) != "" do
+      Runs.record_note(run.id, "setup", %{"title" => "Setup script", "text" => output})
+    end
+  end
 
   defp pr_description(run) do
     summary = (run.summary || "") |> String.replace(~r/\n*\s*DONE\s*\z/, "") |> String.trim()

@@ -234,8 +234,13 @@ defmodule Conductor.Runs do
         do: query,
         else: Ash.Query.filter(query, conversation == ^conversation)
 
-    Ash.read!(query)
+    query |> Ash.read!() |> Enum.reject(&empty_setup_note?/1)
   end
+
+  defp empty_setup_note?(%{kind: "conductor.note", entry: "n:setup", payload: payload}),
+    do: String.trim(payload["text"] || "") == ""
+
+  defp empty_setup_note?(_event), do: false
 
   @doc "The run's conversations as `{conversation, role}`, the head first."
   def conversations(run_id) do
@@ -244,6 +249,9 @@ defmodule Conductor.Runs do
     Repo.all(
       from e in Event,
         where: e.run_id == ^run_id,
+        where:
+          not (e.kind == "conductor.note" and e.entry == "n:setup" and
+                 fragment("coalesce(?->>'text', '') ~ '^[[:space:]]*$'", e.payload)),
         group_by: [e.conversation, e.role],
         order_by: [min(e.id)],
         select: {e.conversation, e.role}
