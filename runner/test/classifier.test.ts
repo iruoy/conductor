@@ -191,3 +191,44 @@ it.each([false, true])("does not repeat a paid request after SQLite restart (int
 		await rm(dir, { recursive: true, force: true });
 	}
 });
+it("shares linear-size context for 100 subtasks without duplicating descriptions", async () => {
+	const { runner, models } = await setup();
+	configure(models).mockResolvedValue({ type: "api_key" });
+	const payloadSizes: number[] = [];
+	const call = vi.spyOn(models, "classify").mockImplementation(async (_model, context) => {
+		const issues = context.state.issues as { key: string; description: string; parentKey: string | null; subtaskKeys: string[] }[];
+		const targets = context.state.targets as string[];
+		const payload = JSON.stringify(context);
+		payloadSizes.push(payload.length);
+		expect(issues).toHaveLength(targets.length);
+		expect(issues[0]).toMatchObject({ key: "root", parentKey: null, subtaskKeys: targets.slice(1) });
+		for (const issue of issues) {
+			expect(payload.split(issue.description)).toHaveLength(2);
+			if (issue.key !== "root") expect(issue).toMatchObject({ parentKey: "root", subtaskKeys: [] });
+		}
+		return {
+			...response,
+			answers: Object.fromEntries(targets.map((_, index) => [`issue_${index}`, answer])),
+		};
+	});
+	for (const count of [50, 100]) {
+		const issue = {
+			...command.issue,
+			description: `root-description:${"r".repeat(4000)}:end`,
+			subtasks: Array.from({ length: count }, (_, index) => ({
+				key: `child-${index}`,
+				summary: `Child ${index}`,
+				description: `child-description-${index}:${"x".repeat(4000)}:end`,
+				size: "",
+				subtasks: [],
+			})),
+		};
+		const result = await runner.handle({ ...command, run_id: `wide-${count}`, issue }) as Record<string, Audit>;
+		expect(Object.values(result)).toHaveLength(count + 1);
+		expect(Object.values(result).every((audit) => audit.status === "suggested")).toBe(true);
+	}
+	expect(call).toHaveBeenCalledTimes(2);
+	// Doubling targets adds descriptions/questions linearly, not another copy of
+	// every parent/sibling description for each new target.
+	expect(payloadSizes[1]!).toBeLessThan(payloadSizes[0]! * 2.1);
+});
