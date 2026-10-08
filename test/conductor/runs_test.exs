@@ -205,7 +205,7 @@ defmodule Conductor.RunsTest do
     updated = transition_run(first, :completed, %{summary: "done\n"})
     assert updated.summary == "done\n"
     assert Conductor.Runs.Run.terminal?(updated)
-    assert Conductor.Runs.Run.terminal_statuses() == ~w(completed failed)a
+    assert Conductor.Runs.Run.terminal_statuses() == ~w(completed merged failed)a
     assert is_atom(updated.status)
     assert Runs.open_issue_keys(["SHOP-1", "SHOP-2"]) == ["SHOP-1"]
     assert [queued] = Runs.list_by_status([:picked_up])
@@ -509,7 +509,7 @@ defmodule Conductor.RunsTest do
       assert [%{id: "shop-3-1"}] = Runs.filter_runs(:failed)
       assert length(Runs.filter_runs(:all)) == 4
 
-      assert %{all: 4, running: 2, failed: 1, completed: 1, waiting: 0, picked_up: 0} =
+      assert %{all: 4, running: 2, failed: 1, completed: 1, merged: 0, waiting: 0, picked_up: 0} =
                Runs.group_counts()
 
       assert Runs.count_runs(:running) == 2

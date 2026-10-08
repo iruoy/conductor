@@ -88,6 +88,7 @@ defmodule Conductor.Fixtures do
         :waiting_for_input -> [:pump, :provision_end, :wait_for_input]
         :handing_off -> [:pump, :settle]
         :completed -> [:pump, :settle, :complete]
+        :merged -> [:pump, :settle, :complete, :merge]
         :failed -> [:fail]
       end
 
@@ -205,13 +206,22 @@ defmodule Conductor.Fixtures do
             do: Req.Test.json(conn, %{"name" => "branch"}),
             else: conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{"message" => "Not Found"})
 
+        {"GET", ["repos", "acme", "shop", "pulls", number]} ->
+          Req.Test.json(conn, %{
+            "state" => Keyword.get(opts, :pr_state, "open"),
+            "merged" => Keyword.get(opts, :pr_merged, false),
+            "html_url" => "https://github.com/acme/shop/pull/#{number}"
+          })
+
         {"GET", ["repos", "acme", "shop", "pulls"]} ->
           Req.Test.json(conn, [])
 
         {"POST", ["repos", "acme", "shop", "pulls"]} ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           branch = JSON.decode!(body)["head"]
-          Req.Test.json(conn, %{"html_url" => "https://github.com/pr/#{branch}"})
+          number = branch |> String.split("/") |> List.last()
+          send(test, {:github_pr_created, number})
+          Req.Test.json(conn, %{"html_url" => "https://github.com/acme/shop/pull/#{number}"})
       end
     end)
   end

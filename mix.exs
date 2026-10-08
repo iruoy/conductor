@@ -75,7 +75,15 @@ defmodule Conductor.MixProject do
       {:erlexec, "~> 2.5"},
       {:bandit, "~> 1.5"},
       {:req, "~> 0.5"},
-      {:mdex, "~> 0.14.2"}
+      {:mdex, "~> 0.14.2"},
+      {:makeup, "~> 1.2"},
+      {:makeup_elixir, "~> 1.0"},
+      {:makeup_erlang, "~> 1.1"},
+      {:makeup_html, "~> 1.0"},
+      {:makeup_eex, "~> 2.0"},
+      {:makeup_diff, "~> 0.1.1"},
+      {:makeup_json, "~> 1.0"},
+      {:makeup_syntect, "~> 0.1.4"}
     ]
   end
 

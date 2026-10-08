@@ -2,7 +2,8 @@ defmodule Conductor.Runs.Run do
   @moduledoc """
   One attempt at one issue, with id `<issue key>-<attempt>` (`shop-12-1`).
 
-  Status: `picked_up → provisioning → running ⇄ waiting_for_input → handing_off → completed | failed`.
+  Status: `picked_up → provisioning → running ⇄ waiting_for_input → handing_off → completed → merged`, or `failed`.
+  Completed means in review; merged means done. Review feedback resumes completed runs without a new attempt.
 
   Every status the run gets is kept with its time in `Conductor.Runs.Run.Version` (table `runs_versions`), written
   by `AshPaperTrail` in the transaction of the action that sets it; read it with `Conductor.Runs.status_history/1`.
@@ -13,7 +14,7 @@ defmodule Conductor.Runs.Run do
     extensions: [AshStateMachine, AshPaperTrail.Resource],
     notifiers: [Conductor.Runs.Notifier]
 
-  @terminal ~w(completed failed)a
+  @terminal ~w(completed merged failed)a
 
   postgres do
     table "runs"
@@ -54,6 +55,9 @@ defmodule Conductor.Runs.Run do
       transition :resume, from: :waiting_for_input, to: :running
       transition :settle, from: [:provisioning, :running, :waiting_for_input], to: :handing_off
       transition :complete, from: :handing_off, to: :completed
+      transition :resume_review, from: :completed, to: :running
+      transition :return_to_review, from: :running, to: :completed
+      transition :merge, from: :completed, to: :merged
       transition :hand_off_failed, from: :handing_off, to: :failed
 
       transition :abort,
@@ -102,6 +106,9 @@ defmodule Conductor.Runs.Run do
       :resume,
       :settle,
       :complete,
+      :resume_review,
+      :return_to_review,
+      :merge,
       :hand_off_failed,
       :abort,
       :fail
@@ -161,6 +168,21 @@ defmodule Conductor.Runs.Run do
     update :complete do
       accept [:pr_url]
       change transition_state(:completed)
+    end
+
+    update :resume_review do
+      accept []
+      change transition_state(:running)
+    end
+
+    update :return_to_review do
+      accept []
+      change transition_state(:completed)
+    end
+
+    update :merge do
+      accept []
+      change transition_state(:merged)
     end
 
     update :hand_off_failed do

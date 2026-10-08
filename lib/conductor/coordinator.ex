@@ -45,15 +45,14 @@ defmodule Conductor.Coordinator do
   end
 
   @doc """
-  Tells the head agent of a running run something. It reads it after the tools it is running and goes on from
-  there. Returns the id the runner gave the message, by which it shows in the agent's inbox until it is read.
+  Messages a running head agent, or resumes an in-review run in its original conversation after checking its PR.
+  Running agents read messages after their tools. Returns the runner's submission id.
   """
-  def message(run_id, text) do
-    with {:ok, %{"submission_id" => id}} <-
-           Runner.call(%{type: "message", run_id: run_id, text: text}) do
-      {:ok, id}
-    end
-  end
+  def message(run_id, text),
+    do: GenServer.call(__MODULE__, {:message, run_id, text}, 60_000)
+
+  @doc "Checks a review PR and marks its run done only when GitHub confirms a merge."
+  def sync_review(run_id), do: GenServer.call(__MODULE__, {:sync_review, run_id}, 60_000)
 
   def pump, do: GenServer.cast(__MODULE__, :pump)
 
@@ -104,6 +103,24 @@ defmodule Conductor.Coordinator do
       Runs.open_issue_keys([run.issue_key]) != [] -> {:reply, {:error, :already_open}, state}
       true -> {:reply, Runs.create_run(run.project, run.issue_key, snapshot), pump(state)}
     end
+  end
+
+  def handle_call({:sync_review, run_id}, _from, state) do
+    {:reply, refresh_review(Runs.get_run!(run_id)), state}
+  end
+
+  def handle_call({:message, run_id, text}, _from, state) do
+    run = Runs.get_run!(run_id)
+
+    result =
+      cond do
+        String.trim(text) == "" -> {:error, :empty_message}
+        run.status == :completed -> resume_review(run, text)
+        run.status == :running -> send_message(run.id, text)
+        true -> {:error, :not_messageable}
+      end
+
+    {:reply, result, state}
   end
 
   def handle_call({:abort, run_id}, _from, state) do
@@ -302,7 +319,7 @@ defmodule Conductor.Coordinator do
 
         with {:ok, true} <- GitHub.branch_exists?(repo, run.branch),
              {:ok, url} <-
-               GitHub.find_or_create_pr(repo, run.branch, base, title, pr_description(run)),
+               handoff_pr(run, base, title),
              {:ok, _} <- GitHub.transition(run.project, number, run.project.handoff_status) do
           Runs.complete(run, %{pr_url: url})
           :ok
@@ -317,10 +334,105 @@ defmodule Conductor.Coordinator do
     end
   end
 
+  defp handoff_pr(%Run{pr_url: nil} = run, base, title),
+    do: GitHub.find_or_create_pr(run.project.repo, run.branch, base, title, pr_description(run))
+
+  defp handoff_pr(run, _base, _title) do
+    case GitHub.pull_request(run.project.repo, run.pr_url) do
+      {:ok, %{"state" => "open", "merged" => false}} -> {:ok, run.pr_url}
+      {:ok, %{"merged" => true}} -> {:ok, run.pr_url}
+      {:ok, _} -> {:error, :pr_closed}
+      error -> error
+    end
+  end
+
+  defp send_message(run_id, text) do
+    with {:ok, %{"submission_id" => id}} <-
+           Runner.call(%{type: "message", run_id: run_id, text: text}) do
+      {:ok, id}
+    end
+  end
+
+  defp refresh_review(%Run{status: :completed} = run) do
+    with {:ok, pr} <- GitHub.pull_request(run.project.repo, run.pr_url) do
+      if pr["merged"] do
+        mark_merged(run)
+      else
+        {:ok, run}
+      end
+    end
+  end
+
+  defp refresh_review(run), do: {:ok, run}
+
+  defp mark_merged(run) do
+    # A board permission/configuration failure must not leave a merged PR messageable.
+    with {:ok, merged} <- Runs.merge(run) do
+      case GitHub.transition(run.project, GitHub.number(run.issue_key), run.project.done_status) do
+        {:ok, _} ->
+          {:ok, merged}
+
+        {:error, reason} ->
+          Logger.warning(
+            "coordinator: #{run.id} merged, but moving its issue to Done failed: #{inspect(reason)}"
+          )
+
+          {:error, reason}
+      end
+    end
+  end
+
+  defp resume_review(run, text) do
+    with {:ok, pr} <- GitHub.pull_request(run.project.repo, run.pr_url),
+         :ok <- review_pr_open(run, pr),
+         :ok <- review_resumable(run),
+         {:ok, _} <-
+           GitHub.transition(run.project, GitHub.number(run.issue_key), run.project.active_status),
+         {:ok, running} <- Runs.resume_review(run) do
+      case Runner.call(%{type: "resume_run", run_id: run.id, text: text}) do
+        {:ok, %{"submission_id" => id}} ->
+          {:ok, id}
+
+        {:error, _} = error ->
+          Runs.return_to_review(running)
+          GitHub.transition(run.project, GitHub.number(run.issue_key), run.project.handoff_status)
+          error
+      end
+    end
+  end
+
+  defp review_pr_open(run, %{"merged" => true}) do
+    # Reject feedback even if updating the board fails; GitHub is authoritative.
+    mark_merged(run)
+    {:error, :pr_merged}
+  end
+
+  defp review_pr_open(_run, %{"state" => "open", "merged" => false}), do: :ok
+  defp review_pr_open(_run, _pr), do: {:error, :pr_closed}
+
+  defp review_resumable(run) do
+    cond do
+      run.status != :completed ->
+        {:error, :pr_merged}
+
+      Runs.active_count() >= Config.get_settings().max_concurrent ->
+        {:error, :concurrency_limit}
+
+      not is_binary(run.workspace_path) or not File.dir?(run.workspace_path) ->
+        {:error, :workspace_unavailable}
+
+      true ->
+        :ok
+    end
+  end
+
   defp record_setup(_run, nil), do: :ok
 
-  defp record_setup(run, output),
-    do: Runs.record_note(run.id, "setup", %{"title" => "Setup script", "text" => output})
+  defp record_setup(run, output) do
+    if String.trim(output) != "" do
+      Runs.record_note(run.id, "setup", %{"title" => "Setup script", "text" => output})
+    end
+  end
 
   defp pr_description(run) do
     summary = (run.summary || "") |> String.replace(~r/\n*\s*DONE\s*\z/, "") |> String.trim()

@@ -42,12 +42,13 @@ defmodule Conductor.Runs do
     running: ~w(running provisioning handing_off)a,
     waiting: ~w(waiting_for_input)a,
     completed: ~w(completed)a,
+    merged: ~w(merged)a,
     failed: ~w(failed)a,
     picked_up: ~w(picked_up)a
   }
 
   @doc "The filter groups of the runs list, in display order."
-  def status_groups, do: [:all, :running, :waiting, :completed, :failed, :picked_up]
+  def status_groups, do: [:all, :running, :waiting, :completed, :merged, :failed, :picked_up]
 
   @doc """
   The newest runs in a status group (`:all` for every status) whose id or issue summary contains `text`,
@@ -156,10 +157,8 @@ defmodule Conductor.Runs do
   defp priority_rank(run), do: (run.issue_snapshot || %{})["priority_rank"] || :infinity
 
   def open_issue_keys(keys) do
-    terminal = Run.terminal_statuses()
-
     Run
-    |> Ash.Query.filter(issue_key in ^keys and status not in ^terminal)
+    |> Ash.Query.filter(issue_key in ^keys and status not in [:merged, :failed])
     |> Ash.Query.select(:issue_key)
     |> Ash.read!()
     |> Enum.map(& &1.issue_key)
@@ -188,6 +187,9 @@ defmodule Conductor.Runs do
         :resume,
         :settle,
         :complete,
+        :resume_review,
+        :return_to_review,
+        :merge,
         :hand_off_failed,
         :abort,
         :fail,
@@ -209,14 +211,13 @@ defmodule Conductor.Runs do
 
   defp persist(changeset, action), do: apply(Ash, action, [changeset])
 
-  @doc "Terminal runs whose workspace is older than `days`."
+  @doc "Failed or merged runs whose workspace is older than `days`; review workspaces are retained."
   def list_prunable(days) do
     cutoff = DateTime.utc_now() |> DateTime.add(-days, :day)
-    terminal = Run.terminal_statuses()
 
     Run
     |> Ash.Query.filter(
-      status in ^terminal and not is_nil(workspace_path) and updated_at < ^cutoff
+      status in [:merged, :failed] and not is_nil(workspace_path) and updated_at < ^cutoff
     )
     |> Ash.read!()
   end
@@ -235,8 +236,13 @@ defmodule Conductor.Runs do
         do: query,
         else: Ash.Query.filter(query, conversation == ^conversation)
 
-    Ash.read!(query)
+    query |> Ash.read!() |> Enum.reject(&empty_setup_note?/1)
   end
+
+  defp empty_setup_note?(%{kind: "conductor.note", entry: "n:setup", payload: payload}),
+    do: String.trim(payload["text"] || "") == ""
+
+  defp empty_setup_note?(_event), do: false
 
   @doc "The run's conversations as `{conversation, role}`, the head first."
   def conversations(run_id) do
@@ -245,6 +251,9 @@ defmodule Conductor.Runs do
     Repo.all(
       from e in Event,
         where: e.run_id == ^run_id,
+        where:
+          not (e.kind == "conductor.note" and e.entry == "n:setup" and
+                 fragment("coalesce(?->>'text', '') ~ '^[[:space:]]*$'", e.payload)),
         group_by: [e.conversation, e.role],
         order_by: [min(e.id)],
         select: {e.conversation, e.role}

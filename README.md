@@ -83,7 +83,12 @@ Git pushes use the machine's own git credentials (SSH agent or credential helper
    pushes, and ends with `DONE` or `FAILED: reason`. `ask_human` questions, and a final message without a verdict,
    appear on the run page to answer.
 4. On `DONE` the Coordinator checks the branch was pushed, opens (or finds) the PR (`Closes #12`), and moves the
-   issue to the hand-off status. Retry starts `shop-12-2`; finished workspaces are pruned after `prune_days`.
+   issue to the hand-off status. The run displays **In review** (`completed` internally), with its prompt still available.
+5. Review feedback resumes the same run, conversation, workspace, branch and PR, displaying **In progress**.
+   It needs a free concurrency slot and the original workspace. Closed or merged PRs cannot be resumed.
+6. Each poll checks review PRs; a confirmed merge marks the run **Done** (`merged`) and removes the prompt.
+   GitHub board statuses alone never prove a merge. Failed runs can be retried as `shop-12-2`;
+   only failed or merged workspaces are pruned after `prune_days`, so review workspaces remain available.
 
 The project's fields must be single-select fields named `Status`, `Size` and `Priority`, as in GitHub's templates.
 

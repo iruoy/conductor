@@ -55,6 +55,26 @@ defmodule ConductorWeb.RunLiveTest do
     assert has_element?(view, "[data-issue-key='#93']", "explicit · low")
   end
 
+  test "empty setup output does not create a Conductor tab, but real logs remain accessible", %{
+    conn: conn,
+    project: project
+  } do
+    run = run_fixture(project, "setup-38", %{status: :running})
+    Runs.record_note(run.id, "setup", %{"title" => "Setup script", "text" => " \n\t"})
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+    refute has_element?(view, "#tab-0")
+    refute has_element?(view, "[data-note]")
+
+    Runs.record_note(run.id, "setup", %{
+      "title" => "Setup script",
+      "text" => "Installed dependencies"
+    })
+
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+    assert has_element?(view, "#tab-0")
+    assert has_element?(view, "[data-note] pre", "Installed dependencies")
+  end
+
   test "head and subagent transcripts omit context debug UI", %{
     conn: conn,
     project: project
@@ -110,9 +130,40 @@ defmodule ConductorWeb.RunLiveTest do
     assert_receive {:run_updated, %{id: "shop-2-1", status: :completed}}, 5_000
     eventually(fn -> assert render(view) =~ "Did it." end)
     refute render(view) =~ "Which way?"
-    # The run is over: there is nothing left to say or stop.
-    refute has_element?(view, "form[phx-hook]")
+    # In review: feedback is enabled, but there is no active work to stop.
+    assert has_element?(view, "#prompt textarea:not([disabled])")
+    refute has_element?(view, "#abort")
     assert [%{answer: "left"}] = Runs.list_questions("shop-2-1")
+  end
+
+  test "review feedback resumes the same run and merging removes its prompt", %{
+    conn: conn,
+    project: project
+  } do
+    {:ok, run} = Coordinator.enqueue(project, "shop-81", snapshot("shop-81"))
+    assert_receive {:run_updated, %{id: "shop-81-1", status: :completed}}, 10_000
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+    assert has_element?(view, "#run-status[data-status=completed]", "In review")
+    assert has_element?(view, "#prompt textarea:not([disabled])")
+    refute has_element?(view, "#abort")
+
+    view |> form("#prompt", %{"text" => "Please address the review"}) |> render_submit()
+    assert_push_event(view, "prompt:sent", %{id: "prompt"})
+    assert has_element?(view, "#run-status[data-status=running]", "In progress")
+    assert has_element?(view, "#abort")
+    assert Runs.get_run!(run.id).attempt == 1
+
+    Conductor.Runner.call(%{type: "fake_settle", run_id: run.id, outcome: "completed"})
+    assert_receive {:run_updated, %{id: "shop-81-1", status: :completed}}, 5_000
+    stub_github(pr_state: "closed", pr_merged: true)
+    assert :ok = Conductor.Poller.poll()
+    assert has_element?(view, "#run-status[data-status=merged]", "Done")
+    assert has_element?(view, "#tab-1[data-state=done]")
+    refute has_element?(view, "#prompt-bar")
+    refute has_element?(view, "#abort")
+
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+    refute has_element?(view, "#prompt-bar")
   end
 
   test "sends a message to the agent while it works", %{conn: conn, project: project} do
@@ -604,20 +655,11 @@ defmodule ConductorWeb.RunLiveTest do
     send_event.(%{"type" => "message_end", "entry" => entry})
 
     assert has_element?(view, "#items-ev-4-e-6-0 [data-tool=edit] [data-tool-call]", "lib/a.ex")
-    # Each line has its number in the old file and in the new one.
-    lines =
-      view
-      |> render()
-      |> LazyHTML.from_fragment()
-      |> LazyHTML.query("#items-ev-4-e-6-0 [data-diff] > span")
-      |> Enum.map(fn line ->
-        {line |> LazyHTML.query("[data-old]") |> LazyHTML.text(),
-         line |> LazyHTML.query("[data-new]") |> LazyHTML.text()}
-      end)
+    # Makeup preserves the tool's numbered diff and styles additions and deletions.
+    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff]", "1 same")
 
-    assert lines == [{"1", "1"}, {"2", ""}, {"", "2"}, {"", "3"}, {"3", "4"}]
-    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff] .text-success", "new")
-    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff] .text-error", "old")
+    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff] .gi", "+ 2 new")
+    assert has_element?(view, "#items-ev-4-e-6-0 [data-diff] .gd", "- 2 old")
     refute render(view) =~ "Replaced 1 block"
 
     # The same shows after a reload.
@@ -940,7 +982,7 @@ defmodule ConductorWeb.RunLiveTest do
       assert has_element?(view, "#tab-1 :not([data-pulse])")
     end
 
-    test "a completed run is done in every tab, however its conversations ended", %{
+    test "an in-review run has a review head and finished subagents", %{
       conn: conn,
       project: project
     } do
@@ -949,7 +991,7 @@ defmodule ConductorWeb.RunLiveTest do
       entry(run, 2, "sub:#12", 1, "pi.tool-result")
 
       {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
-      assert has_element?(view, "#tab-1[data-state=done]")
+      assert has_element?(view, "#tab-1[data-state=review]")
       assert has_element?(view, "#tab-2[data-state=done]")
     end
 
@@ -1033,7 +1075,7 @@ defmodule ConductorWeb.RunLiveTest do
       assert has_element?(
                view,
                "#{entries}:nth-child(3)[data-status=running]:last-child",
-               "Running"
+               "In progress"
              )
 
       assert has_element?(view, "#{entries}:nth-child(3) time[datetime]")

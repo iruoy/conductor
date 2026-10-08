@@ -278,6 +278,39 @@ describe("runner protocol", () => {
 		expect(events.filter((e) => e.type === "run_settled")).toHaveLength(1);
 	});
 
+	it("resumes review feedback in the same conversation, retaining prior context", async () => {
+		let contextSeen = "";
+		const { runner, events } = await setup([
+			fauxAssistantMessage("Original implementation.\nDONE"),
+			(context) => {
+				contextSeen = JSON.stringify(context.messages);
+				return fauxAssistantMessage("Review addressed.\nDONE");
+			},
+		]);
+		const original = (await start(runner, "REVIEW-1-1")) as { conversation_id: number };
+		await settledEvent(events, "REVIEW-1-1");
+		const reply = (await runner.handle({
+			type: "resume_run", run_id: "REVIEW-1-1", text: "Fix the review findings",
+		})) as { conversation_id: number };
+		expect(reply.conversation_id).toBe(original.conversation_id);
+		await until(() => events.filter((e) => e.type === "run_settled" && e.run_id === "REVIEW-1-1")[1]);
+		expect(contextSeen).toContain("Original implementation.");
+		expect(contextSeen).toContain("Fix the review findings");
+		expect(events.filter((e) => e.type === "run_settled").at(-1)).toMatchObject({
+			outcome: "completed", summary: "Review addressed.\nDONE",
+		});
+	});
+
+	it("rejects review feedback for failed runs and empty feedback", async () => {
+		const { runner, events } = await setup([fauxAssistantMessage("FAILED: broken")]);
+		await start(runner, "REVIEW-2-1");
+		await settledEvent(events, "REVIEW-2-1");
+		await expect(runner.handle({ type: "resume_run", run_id: "REVIEW-2-1", text: "Try again" })).rejects.toThrow(
+			"not ready for review feedback",
+		);
+		await expect(runner.handle({ type: "resume_run", run_id: "REVIEW-2-1", text: " " })).rejects.toThrow("empty review feedback");
+	});
+
 	it("takes no message for a run that is not running", async () => {
 		const { runner, events } = await setup([fauxAssistantMessage("DONE")]);
 		await start(runner, "PROJ-23-1");
@@ -316,6 +349,26 @@ describe("runner protocol", () => {
 		expect(sync.runs).toMatchObject([{ run_id: "PROJ-10-1", status: "waiting_for_input" }]);
 		await second.runner.handle({ type: "answer", run_id: "PROJ-10-1", qid: sync.runs[0]!.questions[0]!.qid, text: "yes" });
 		expect(await settledEvent(second.events, "PROJ-10-1")).toMatchObject({ outcome: "completed" });
+	});
+
+	it("resumes a completed conversation after a runner restart", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "conductor-review-"));
+		dirs.push(dir);
+		const file = join(dir, "runner.sqlite");
+		const first = await setup([fauxAssistantMessage("Original implementation.\nDONE")], await openNodeSqliteStorage(file));
+		const original = (await start(first.runner, "REVIEW-3-1")) as { conversation_id: number };
+		await settledEvent(first.events, "REVIEW-3-1");
+		await first.runner.close();
+		open.splice(open.indexOf(first.runner), 1);
+
+		const second = await setup([fauxAssistantMessage("Review addressed.\nDONE")], await openNodeSqliteStorage(file));
+		const resumed = (await second.runner.handle({
+			type: "resume_run", run_id: "REVIEW-3-1", text: "Address feedback",
+		})) as { conversation_id: number };
+		expect(resumed.conversation_id).toBe(original.conversation_id);
+		expect(await settledEvent(second.events, "REVIEW-3-1")).toMatchObject({
+			outcome: "completed", summary: "Review addressed.\nDONE",
+		});
 	});
 
 	it("lists the models with the thinking levels pi supports for each", async () => {

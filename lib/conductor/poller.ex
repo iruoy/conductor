@@ -76,7 +76,8 @@ defmodule Conductor.Poller do
   """
   def poll do
     reasons =
-      for project <- Config.list_enabled_projects(), reason = poll_safely(project), do: reason
+      for(project <- Config.list_enabled_projects(), reason = poll_safely(project), do: reason) ++
+        sync_reviews()
 
     last_poll =
       %{at: DateTime.utc_now(:second), ok?: reasons == [], reason: Enum.join(reasons, "; ")}
@@ -84,6 +85,14 @@ defmodule Conductor.Poller do
 
     if Process.whereis(__MODULE__), do: GenServer.cast(__MODULE__, {:polled, last_poll})
     :ok
+  end
+
+  defp sync_reviews do
+    for run <- Runs.list_by_status([:completed]),
+        not is_nil(run.pr_url),
+        {:error, reason} <- [Coordinator.sync_review(run.id)] do
+      "#{run.id} PR: #{reason_text(reason)}"
+    end
   end
 
   defp poll_safely(project) do

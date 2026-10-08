@@ -9,7 +9,7 @@ defmodule ConductorWeb.RunComponents do
 
   @doc """
   The status of a run as a pill with a dot, in the colours of the status: under way (`provisioning`, `running`,
-  `handing_off`) info, `waiting_for_input` warning, `completed` success, `failed` error, anything else neutral.
+  `handing_off`) info, `waiting_for_input` warning, `completed` in review, `merged` success, `failed` error, anything else neutral.
   The label is the status in words; `data-status` carries the status itself.
   """
   def status_badge(assigns) do
@@ -29,9 +29,13 @@ defmodule ConductorWeb.RunComponents do
   end
 
   @doc "A run status in words: `:waiting_for_input` is \"waiting for input\"."
+  def status_label(:running), do: "In progress"
+  def status_label(:completed), do: "In review"
+  def status_label(:merged), do: "Done"
   def status_label(status), do: String.replace(to_string(status), "_", " ")
 
-  defp badge_class(:completed), do: "bg-chip-success-bg text-chip-success-fg"
+  defp badge_class(:completed), do: "bg-chip-info-bg text-primary"
+  defp badge_class(:merged), do: "bg-chip-success-bg text-chip-success-fg"
   defp badge_class(:failed), do: "bg-chip-error-bg text-chip-error-fg"
   defp badge_class(:waiting_for_input), do: "bg-chip-warning-bg text-chip-warning-fg"
 
@@ -708,16 +712,16 @@ defmodule ConductorWeb.RunComponents do
         tabindex="0"
         role="group"
         aria-label="Written file content"
-        class={[tool_pre(), wrap()]}
-      >{truncate(@written, 8000)}</pre>
+        class={[tool_pre(), wrap(), "tool-code"]}
+      >{ConductorWeb.CodeHighlight.render(truncate(@written, 8000), @args["path"])}</pre>
       <pre
         :if={@diff}
         tabindex="0"
         role="group"
         aria-label={"#{@name} diff"}
         data-diff
-        class={tool_pre()}
-      ><span :for={line <- diff_lines(@diff)} class={["block min-h-[1lh]", diff_color(line.sign)]}><span data-old class="inline-block w-[5ch] select-none text-right opacity-50">{line.old}</span><span data-new class="inline-block w-[5ch] select-none text-right opacity-50">{line.new}</span><span class="inline-block w-[3ch] select-none text-center">{line.sign}</span>{line.text}</span></pre>
+        class={[tool_pre(), "tool-code"]}
+      >{ConductorWeb.CodeHighlight.diff(@diff)}</pre>
       <pre
         :if={@output != "" and !@diff}
         tabindex="0"
@@ -793,36 +797,6 @@ defmodule ConductorWeb.RunComponents do
       [_, code] -> String.to_integer(code)
       nil -> nil
     end
-  end
-
-  defp diff_color("+"), do: "text-success"
-  defp diff_color("-"), do: "text-error"
-  defp diff_color(_sign), do: nil
-
-  # pi numbers each line of a diff once: an added line as it is in the new file, any other as it was in the old
-  # one. This gives every line both numbers, by counting what was added and removed before it.
-  defp diff_lines(diff) do
-    {lines, _shift} =
-      diff
-      |> String.split("\n")
-      |> Enum.map_reduce(0, fn line, shift ->
-        case Regex.run(~r/^([+\- ])\s*(\d+) (.*)$/s, line) do
-          [_, "+", number, text] ->
-            {%{sign: "+", old: nil, new: number, text: text}, shift + 1}
-
-          [_, "-", number, text] ->
-            {%{sign: "-", old: number, new: nil, text: text}, shift - 1}
-
-          [_, " ", number, text] ->
-            new = String.to_integer(number) + shift
-            {%{sign: nil, old: number, new: new, text: text}, shift}
-
-          nil ->
-            {%{sign: nil, old: nil, new: nil, text: String.trim(line)}, shift}
-        end
-      end)
-
-    lines
   end
 
   defp tool_icon("bash"), do: "hero-command-line-micro"

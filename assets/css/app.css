@@ -253,6 +253,33 @@
   outline-offset: -2px;
 }
 
+/* Makeup token colors, scoped to tool code so terminal output stays untouched. */
+.tool-code :is(.k, .kc, .kd, .kn, .kp, .kr, .kt, .o, .ow) {
+  color: var(--link);
+}
+.tool-code :is(.s, .sa, .sb, .sc, .sd, .s1, .s2, .se, .sh, .si, .sr, .ss) {
+  color: var(--chip-success-fg);
+}
+.tool-code :is(.m, .mb, .mf, .mh, .mi, .mo, .il, .na, .nb, .nc, .nf) {
+  color: var(--chip-warning-fg);
+}
+.tool-code :is(.c, .c1, .ch, .cm, .cp, .cpf, .cs) {
+  color: var(--fg-tertiary);
+  font-style: italic;
+}
+.tool-code .gi {
+  color: var(--chip-success-fg);
+  background: var(--chip-success-bg);
+}
+.tool-code .gd {
+  color: var(--chip-error-fg);
+  background: var(--chip-error-bg);
+}
+.tool-code :is(.gh, .gs) {
+  color: var(--link);
+  font-weight: 600;
+}
+
 /* Add variants based on LiveView classes */
 @custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);

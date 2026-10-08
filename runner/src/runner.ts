@@ -123,6 +123,8 @@ export class Runner {
 				return this.answer(command);
 			case "message":
 				return this.message(command);
+			case "resume_run":
+				return this.resumeRun(command);
 			case "abort":
 				return this.abort(str(command, "run_id"));
 			case "sync":
@@ -264,6 +266,32 @@ export class Runner {
 			});
 			this.track(runId);
 			return { submission_id: submission.id };
+		});
+	}
+
+	/** Review feedback starts another turn in the original durable conversation and workspace. */
+	private resumeRun(command: Command) {
+		const runId = str(command, "run_id");
+		const text = str(command, "text");
+		if (text.trim() === "") throw new ProtocolError("empty review feedback");
+		return this.serial(runId, async () => {
+			const run = await this.run(runId);
+			if (run?.status !== "settled" || run.settled?.outcome !== "completed") {
+				throw new ProtocolError(`run ${runId} is not ready for review feedback`);
+			}
+			const conversation = await this.harness.conversation(run.conversationId as ConversationId, ctx);
+			if (!conversation) throw new ProtocolError(`missing conversation for ${runId}`);
+			await this.attach(runId, run.conversationId, "head");
+			const submission = await conversation.submit({ type: "input", content: text }, ctx);
+			await this.update(runId, (r) => {
+				r.submissionId = submission.id as number;
+				r.messages = [];
+				r.status = "running";
+				r.settled = null;
+				r.aborted = false;
+			});
+			this.track(runId);
+			return { submission_id: submission.id, conversation_id: run.conversationId };
 		});
 	}
 
