@@ -12,6 +12,14 @@ export type ContextInspection = {
 	head: { id: number; kind: string; head: number | null } | null;
 };
 
+// System sections and tool deltas are model-visible instructions, not provider configuration.
+const messageFields: Record<ContextView["messages"][number]["role"], readonly string[]> = {
+	system: ["role", "content", "sections", "toolsAdded", "toolsRemoved"],
+	user: ["role", "content"],
+	assistant: ["role", "content"],
+	toolResult: ["role", "content", "toolCallId", "toolName", "isError"],
+};
+
 const sensitiveKey = /(?:api[_-]?key|token|secret|password|passwd|credential|authorization|cookie|private[_-]?key)/i;
 const omittedKey = /^(?:thinking|reasoning|thinkingSignature|signature|provider|providerConfig|credentials)$/i;
 
@@ -51,10 +59,10 @@ export function contextPage(
 		return value;
 	};
 	const messages = view.messages.map((message) => {
-		// Allowlist outer fields: assistant messages also contain provider/model, usage and other internal metadata.
+		// Select model-visible fields per role, then redact recursively. Provider/usage metadata stays excluded.
 		const raw = message as unknown as Record<string, unknown>;
 		return sanitize(Object.fromEntries(
-			["role", "content", "toolCallId", "toolName", "isError"].filter((key) => key in raw).map((key) => [key, raw[key]]),
+			messageFields[message.role].filter((key) => key in raw).map((key) => [key, raw[key]]),
 		));
 	});
 	// Offsets count Unicode characters, not bytes; redact before slicing so page boundaries cannot split a secret.

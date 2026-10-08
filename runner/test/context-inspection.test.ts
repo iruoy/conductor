@@ -106,6 +106,41 @@ describe("historical context inspection", () => {
 		}
 	});
 
+	it("preserves system instruction sections and tool changes while redacting their secrets", async () => {
+		const { harness, ids, inspect } = await fixture();
+		const tool = {
+			name: "lookup", description: "Look up records using configured-github-secret",
+			parameters: { type: "object" as const, properties: { query: { type: "string" as const } }, required: ["query"] },
+		};
+		const entries = await harness.commit(async (tx) => {
+			const baseline = await tx.appendEntry(ids.head, {
+				kind: "pi.system", model: [{ role: "system", content: "", timestamp: 7,
+					sections: { instructions: "Follow AGENTS.md; run mix precommit", access: "Bearer configured-github-secret" },
+					toolsAdded: [tool] }],
+			});
+			const update = await tx.appendEntry(ids.head, {
+				kind: "pi.system", model: [{ role: "system", content: "Additional instructions", timestamp: 8,
+					sections: { instructions: "Run the runner tests too", access: null },
+					toolsRemoved: [{ name: "lookup" }] }],
+			});
+			return { baseline: baseline.id, update: update.id };
+		}, ctx);
+		const baseline = JSON.parse((await inspect(ids.head, entries.baseline)).text);
+		expect(baseline).toContainEqual({
+			role: "system", content: "",
+			sections: { instructions: "Follow AGENTS.md; run mix precommit", access: "Bearer [REDACTED]" },
+			toolsAdded: [{ ...tool, description: "Look up records using [REDACTED]" }],
+		});
+		expect(baseline).not.toContainEqual(expect.objectContaining({ content: "Additional instructions" }));
+		const updated = await inspect(ids.head, entries.update);
+		expect(JSON.parse(updated.text)).toContainEqual({
+			role: "system", content: "Additional instructions",
+			sections: { instructions: "Run the runner tests too", access: null }, toolsRemoved: [{ name: "lookup" }],
+		});
+		expect(updated.text).not.toContain("configured-github-secret");
+		expect(updated.text).not.toContain('"timestamp"');
+	});
+
 	it("returns generic errors for invalid ids, membership, cutoffs and offsets", async () => {
 		const { runner, ids, events } = await fixture();
 		const base: Command = { type: "inspect_context", run_id: "test", conversation: ids.head, entry: ids.first };
