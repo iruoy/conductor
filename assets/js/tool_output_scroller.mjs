@@ -5,10 +5,14 @@ export default {
   mounted() {
     this.following = true
     this.expectedTop = null
+    this.lastTop = null
 
     this.onScroll = () => {
       // Collapsed panels have zero geometry, not a reader returning to the end.
-      if (this.el.clientHeight === 0) return
+      if (this.el.clientHeight === 0) {
+        this.lastTop = null
+        return
+      }
 
       if (this.atEnd()) {
         this.following = true
@@ -23,6 +27,7 @@ export default {
         this.following = false
         this.expectedTop = null
       }
+      this.lastTop = this.el.scrollTop
     }
 
     this.el.addEventListener("scroll", this.onScroll, {passive: true})
@@ -46,12 +51,24 @@ export default {
   },
 
   follow() {
-    if (!this.following || this.el.clientHeight === 0) return
+    if (this.el.clientHeight === 0) {
+      this.lastTop = null
+      return
+    }
+    if (!this.following) return
+
+    // Reader scrolling can precede its queued scroll event and a LiveView patch.
+    if (this.lastTop !== null && this.el.scrollTop < this.lastTop && !this.atEnd()) {
+      this.following = false
+      this.expectedTop = null
+      return
+    }
 
     const top = Math.max(0, this.el.scrollHeight - this.el.clientHeight)
     if (this.el.scrollTop !== top) {
       this.expectedTop = top
       this.el.scrollTop = top
     }
+    this.lastTop = this.el.scrollTop
   }
 }
