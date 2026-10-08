@@ -648,7 +648,7 @@ defmodule ConductorWeb.RunComponents do
         call: call,
         # The header has one line; a call that takes more is shown whole under it.
         line: call |> String.split("\n", parts: 2) |> hd(),
-        output: clean(assigns.output),
+        output_html: ConductorWeb.AnsiOutput.render(assigns.output),
         written: assigns.name == "write" && is_map(assigns.args) && assigns.args["content"],
         diff: if(assigns.error, do: nil, else: assigns.diff),
         status: tool_status(assigns)
@@ -727,7 +727,7 @@ defmodule ConductorWeb.RunComponents do
         data-tool-output
         phx-hook={@id && "ToolOutputScroller"}
         class={[tool_pre(), wrap()]}
-      >{@output}</pre>
+      >{@output_html}</pre>
     </div>
     """
   end
@@ -824,10 +824,6 @@ defmodule ConductorWeb.RunComponents do
 
     lines
   end
-
-  # Terminal output carries color codes and carriage returns that mean nothing here.
-  defp clean(output),
-    do: output |> String.replace(~r/\e\[[0-9;?]*[ -\/]*[@-~]/, "") |> String.replace("\r", "")
 
   defp tool_icon("bash"), do: "hero-command-line-micro"
   defp tool_icon("read"), do: "hero-document-text-micro"
