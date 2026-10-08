@@ -177,6 +177,46 @@ defmodule ConductorWeb.RunComponentsTest do
       end
     end
 
+    test "tool-only responses keep their own header and tool execution times" do
+      assistant = fn id, tool ->
+        %{
+          id: id,
+          kind: "pi.assistant",
+          payload: %{
+            "model" => [
+              %{
+                "model" => "gpt-6.1-sol",
+                "durationMs" => 1500,
+                "stopReason" => "toolUse",
+                "content" => [
+                  %{"type" => "toolCall", "id" => tool, "name" => "bash", "arguments" => %{}}
+                ]
+              }
+            ]
+          }
+        }
+      end
+
+      payload = result("bash", "previous output")
+
+      payload =
+        Map.update!(payload, "model", fn [message] ->
+          [Map.merge(message, %{"toolCallId" => "t1", "durationMs" => 250})]
+        end)
+
+      {[first, second], _} =
+        transcript([
+          assistant.("first", "t1"),
+          %{id: "result", kind: "pi.tool-result", payload: payload},
+          assistant.("second", "t2")
+        ])
+
+      assert text(show(first), "[data-response-content] #tool-t1-duration") == "250ms"
+      assert text(show(first), "[data-model-response] > header") == "gpt-6.1-sol · 1.5s"
+      assert found?(show(second), "[data-response-content] [data-tool=bash]")
+      refute text(show(second), "[data-response-content]") =~ "previous output"
+    end
+
     test "model response timing is shown once without duplicating multi-block responses" do
       item = %{
         id: "assistant",
@@ -197,12 +237,15 @@ defmodule ConductorWeb.RunComponentsTest do
       }
 
       shown = parts(item)
-      assert length(Enum.filter(shown, &(&1.kind == "model-timing"))) == 1
+      assert [%{kind: "response", parts: [_, _]} = response] = shown
+      assert found?(show(response), "[data-model-response] > header[data-model-duration]")
+      assert text(show(response), "[data-response-content]") =~ "Hello"
+      assert text(show(response), "[data-response-content]") =~ "Done"
       assert text(show(hd(shown)), "#assistant-timing[data-model-duration]") == "gpt-5.4 · 2.5s"
       assert List.last(shown).final
 
       old = put_in(item.payload["model"], [%{"content" => [], "stopReason" => "stop"}])
-      refute Enum.any?(parts(old), &(&1.kind == "model-timing"))
+      refute Enum.any?(parts(old), &(&1.kind == "response"))
     end
   end
 

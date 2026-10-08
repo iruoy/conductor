@@ -889,8 +889,11 @@ defmodule ConductorWeb.RunLive do
 
     parts =
       case Enum.split(parts, -1) do
-        {parts, [%{kind: "steps"} = tail]} when busy -> parts ++ [%{tail | active: true}]
-        {parts, last} -> parts ++ last
+        {parts, [%{kind: kind} = tail]} when busy and kind in ["steps", "response"] ->
+          parts ++ [%{tail | active: true}]
+
+        {parts, last} ->
+          parts ++ last
       end
 
     turn = %{
@@ -899,8 +902,8 @@ defmodule ConductorWeb.RunLive do
     }
 
     groups =
-      for %{kind: "steps"} = part <- parts,
-          part.active or open_calls(part) != [],
+      for part <- parts,
+          part[:active] == true or open_calls(part) != [],
           into: %{},
           do: {part.id, part}
 
@@ -918,7 +921,8 @@ defmodule ConductorWeb.RunLive do
   defp add_part(socket, %{kind: "steps"} = part) do
     case socket.assigns.groups[socket.assigns.tail] do
       nil -> socket |> assign(tail: part.id) |> put_group(%{part | active: true})
-      tail -> put_group(socket, add_steps(tail, part))
+      %{kind: "steps"} = tail -> put_group(socket, add_steps(tail, part))
+      _ -> socket |> close_tail() |> add_part(part)
     end
   end
 
@@ -937,7 +941,7 @@ defmodule ConductorWeb.RunLive do
 
   # The answer ends the turn: what led up to it folds into one part. The steps at the end are closed in the fold
   # itself, without publishing an intermediate update.
-  defp add_part(socket, %{kind: "text", final: true} = part) do
+  defp add_part(socket, %{final: true} = part) do
     turn = socket.assigns.turn
     tail = socket.assigns.groups[socket.assigns.tail]
 
@@ -957,6 +961,16 @@ defmodule ConductorWeb.RunLive do
       end
 
     socket |> assign(turn: %{started: nil, parts: []}) |> change_transcript(:insert, part)
+  end
+
+  defp add_part(socket, %{kind: "response"} = part) do
+    socket = close_tail(socket)
+
+    if call_ids(part) != [] do
+      socket |> assign(tail: part.id) |> put_group(%{part | active: true})
+    else
+      put_part(socket, part)
+    end
   end
 
   defp add_part(socket, part), do: socket |> close_tail() |> put_part(part)
@@ -982,7 +996,7 @@ defmodule ConductorWeb.RunLive do
     socket |> assign(turn: %{turn | parts: parts}) |> change_transcript(:insert, part)
   end
 
-  # A message can update a group and then fold it, or add timing that immediately goes into the fold.
+  # A message can update a group and then fold it, or add a response that immediately goes into the fold.
   # LiveView keeps pending inserts even when stream_delete follows them in the same render. Publish only
   # the last operation for each row so a folded row cannot be reinserted alongside its work group.
   defp change_transcript(socket, operation, part) do
