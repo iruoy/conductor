@@ -696,10 +696,36 @@ defmodule ConductorWeb.RunComponents do
         </span>
       </div>
       <%!-- Each pre is kept on one line: inside a pre, the line breaks of the template would show. --%>
-      <pre :if={@line != @call} class={[tool_pre(), wrap()]}>{@call}</pre>
-      <pre :if={@written} class={[tool_pre(), wrap()]}>{truncate(@written, 8000)}</pre>
-      <pre :if={@diff} data-diff class={tool_pre()}><span :for={line <- diff_lines(@diff)} class={["block min-h-[1lh]", diff_color(line.sign)]}><span data-old class="inline-block w-[5ch] select-none text-right opacity-50">{line.old}</span><span data-new class="inline-block w-[5ch] select-none text-right opacity-50">{line.new}</span><span class="inline-block w-[3ch] select-none text-center">{line.sign}</span>{line.text}</span></pre>
-      <pre :if={@output != "" and !@diff} data-tool-output class={[tool_pre(), wrap()]}>{@output}</pre>
+      <pre
+        :if={@line != @call}
+        tabindex="0"
+        role="group"
+        aria-label={"#{@name} tool call"}
+        class={[tool_pre(), wrap()]}
+      >{@call}</pre>
+      <pre
+        :if={@written}
+        tabindex="0"
+        role="group"
+        aria-label="Written file content"
+        class={[tool_pre(), wrap()]}
+      >{truncate(@written, 8000)}</pre>
+      <pre
+        :if={@diff}
+        tabindex="0"
+        role="group"
+        aria-label={"#{@name} diff"}
+        data-diff
+        class={tool_pre()}
+      ><span :for={line <- diff_lines(@diff)} class={["block min-h-[1lh]", diff_color(line.sign)]}><span data-old class="inline-block w-[5ch] select-none text-right opacity-50">{line.old}</span><span data-new class="inline-block w-[5ch] select-none text-right opacity-50">{line.new}</span><span class="inline-block w-[3ch] select-none text-center">{line.sign}</span>{line.text}</span></pre>
+      <pre
+        :if={@output != "" and !@diff}
+        tabindex="0"
+        role="group"
+        aria-label={"#{@name} output"}
+        data-tool-output
+        class={[tool_pre(), wrap()]}
+      >{@output}</pre>
     </div>
     """
   end
@@ -707,7 +733,7 @@ defmodule ConductorWeb.RunComponents do
   # What a tool put out: Plex Mono at 11.5px, scrolling in its own box.
   defp tool_pre,
     do:
-      "m-0 max-h-60 overflow-auto border-t border-muted bg-surface-2 px-2 py-1.5 font-mono text-[11.5px] leading-[1.45] text-fg-pre"
+      "scrollable-output m-0 max-h-60 overflow-auto border-t border-muted bg-surface-2 px-2 py-1.5 font-mono text-[11.5px] leading-[1.45] text-fg-pre"
 
   defp wrap, do: "whitespace-pre-wrap break-all"
 
@@ -1053,7 +1079,12 @@ defmodule ConductorWeb.RunComponents do
       <summary class="cursor-pointer list-none rounded-field transition-colors hover:text-base-content [&::-webkit-details-marker]:hidden">
         <.rule text={@item.payload["title"]} />
       </summary>
-      <pre class={[tool_pre(), wrap(), "mt-1.5 max-h-96! rounded-field border border-base-300!"]}>{truncate(@item.payload["text"], 8000)}</pre>
+      <pre
+        tabindex="0"
+        role="group"
+        aria-label={@item.payload["title"]}
+        class={[tool_pre(), wrap(), "mt-1.5 max-h-96! rounded-field border border-base-300!"]}
+      >{truncate(@item.payload["text"], 8000)}</pre>
     </details>
     """
   end

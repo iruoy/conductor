@@ -3,6 +3,33 @@ defmodule ConductorWeb.RunComponentsTest do
   import ConductorWeb.RunComponents
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
+  test "tool scroll boxes are named keyboard stops without region landmarks" do
+    for {attrs, labels} <- [
+          {[name: "bash", args: %{"command" => "echo one\necho two"}, output: "one\ntwo"],
+           ["bash tool call", "bash output"]},
+          {[name: "write", args: %{"path" => "file", "content" => "contents"}],
+           ["Written file content"]},
+          {[name: "edit", args: %{"path" => "file"}, diff: "-1 old\n+1 new"], ["edit diff"]},
+          {[name: "bash", args: %{}, output: "failed", error: true], ["bash output"]},
+          {[name: "bash", output: "running", streaming: true], ["bash output"]}
+        ] do
+      html = render_component(&tool/1, attrs)
+      blocks = find(html, "pre")
+      assert Enum.count(blocks) == length(labels)
+
+      for label <- labels do
+        assert found?(html, "pre[aria-label='#{label}']")
+      end
+
+      assert Enum.count(blocks) ==
+               Enum.count(
+                 find(html, "pre.scrollable-output[tabindex='0'][role='group'][aria-label]")
+               )
+
+      refute found?(html, "[role='region']")
+    end
+  end
+
   describe "run_duration/2" do
     @start ~U[2026-10-08 12:00:00Z]
 
@@ -558,6 +585,11 @@ defmodule ConductorWeb.RunComponentsTest do
       html = show(note)
       assert text(html, "details[data-note]:not([open]) > summary [data-rule]") == "Setup"
       assert text(html, "details[data-note] > pre") == "mix deps.get"
+
+      assert found?(
+               html,
+               "details[data-note] > pre.scrollable-output[tabindex='0'][role='group'][aria-label='Setup']"
+             )
 
       html = show(put_in(note.payload["text"], ""))
       assert text(html, "[data-rule]") == "Setup"
