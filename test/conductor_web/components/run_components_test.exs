@@ -136,6 +136,97 @@ defmodule ConductorWeb.RunComponentsTest do
     end
   end
 
+  describe "ANSI tool output" do
+    test "streaming, completed and failed output render styles while retaining patchable scroll hooks" do
+      output = "\e[31m<failure & café>\e[0m\n\t[1m[30m[46m literal  "
+
+      for state <- [[streaming: true], [done: true, exit_code: 0], [done: true, error: true]] do
+        html =
+          render_component(
+            &tool/1,
+            [id: "tool-ansi", name: "bash", output: output] ++ state
+          )
+
+        assert_ansi_output(html, "tool-ansi-output")
+        refute found?(html, "#tool-ansi[phx-update='ignore'], #tool-ansi [phx-update='ignore']")
+      end
+    end
+
+    test "persisted results render ANSI both on a matched call and as orphan tool results" do
+      output = "\e[31m<failure & café>\e[0m\n\t[1m[30m[46m literal  "
+
+      for opts <- [[], [error: "Command exited with code 1"]] do
+        payload = result("bash", output, opts)
+        matched = show(steps([call("ansi", "bash", %{"command" => "mix test"}, payload)]))
+        orphan = show(%{id: "orphan", kind: "pi.tool-result", payload: payload})
+
+        diagnostics =
+          if opts[:error], do: "\n<harness>\n[error] #{opts[:error]}\n</harness>", else: ""
+
+        assert_ansi_output(matched, "tool-ansi-output", diagnostics)
+        assert_ansi_output(orphan, "orphan-tool-result-output", diagnostics)
+        refute found?(orphan, "[phx-update='ignore']")
+      end
+    end
+
+    test "commands and written file contents stay literal rather than becoming terminal markup" do
+      literal = "\e[31m<script>literal & \"quoted\"</script>\e[0m\n[1m[30m[46m café 🐈"
+
+      for {name, args, label} <- [
+            {"bash", %{"command" => literal}, "bash tool call"},
+            {"write", %{"path" => "file", "content" => literal}, "Written file content"}
+          ] do
+        html =
+          render_component(&tool/1,
+            id: "tool-literal",
+            name: name,
+            args: args,
+            output: "ok"
+          )
+
+        selector = "#tool-literal pre[aria-label='#{label}']"
+        assert LazyHTML.text(find(html, selector)) == literal
+        refute found?(html, selector <> " *")
+        refute found?(html, "#tool-literal script")
+      end
+    end
+
+    test "diff contents remain literal inside their existing addition and deletion styling" do
+      literal = "\e[31m<svg onload='alert(1)'> & café\e[0m [1m[30m[46m"
+
+      html =
+        render_component(&tool/1,
+          id: "tool-diff-literal",
+          name: "edit",
+          diff: "-1 #{literal}\n+1 #{literal}",
+          output: "\e[32mnot shown\e[0m"
+        )
+
+      for selector <- ["[data-diff] > .text-error", "[data-diff] > .text-success"] do
+        assert LazyHTML.text(find(html, selector)) =~ literal
+        refute found?(html, selector <> " [style]")
+      end
+
+      refute found?(html, "#tool-diff-literal svg")
+      refute found?(html, "#tool-diff-literal-output")
+    end
+
+    test "ESC-less bracketed text is not guessed to be an ANSI sequence" do
+      output = "[1m[30m[46m INFO [0m\narray[31m] & café 🐈"
+
+      html =
+        render_component(&tool/1,
+          id: "tool-brackets",
+          name: "bash",
+          output: output,
+          done: true
+        )
+
+      assert LazyHTML.text(find(html, "#tool-brackets-output")) == output
+      refute found?(html, "#tool-brackets-output [style]")
+    end
+  end
+
   describe "run_duration/2" do
     @start ~U[2026-10-08 12:00:00Z]
 
@@ -185,6 +276,23 @@ defmodule ConductorWeb.RunComponentsTest do
       nil -> nil
       node -> node |> LazyHTML.text() |> String.split() |> Enum.join(" ")
     end
+  end
+
+  defp assert_ansi_output(html, id, diagnostics \\ "") do
+    selector = "pre##{id}[data-tool-output][phx-hook='ToolOutputScroller']"
+    assert found?(html, selector)
+
+    assert LazyHTML.text(find(html, selector)) ==
+             "<failure & café>\n\t[1m[30m[46m literal  " <> diagnostics
+
+    styled = find(html, selector <> " [style]")
+    assert LazyHTML.text(styled) == "<failure & café>"
+
+    assert Enum.any?(LazyHTML.attribute(styled, "style"), fn style ->
+             Regex.match?(~r/(?:^|;)\s*color:\s*#800000\s*(?:;|$)/, style)
+           end)
+
+    refute found?(html, selector <> " failure, " <> selector <> " harness")
   end
 
   # WCAG relative luminance for the opaque sRGB theme tokens.

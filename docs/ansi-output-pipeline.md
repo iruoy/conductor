@@ -7,6 +7,12 @@
 3. Runner forwards snapshots and live events as JSONL. Phoenix decodes them in the runner port and `Conductor.Runs.ingest/1` persists `message_end` payloads and broadcasts events. These boundaries preserve ESC and BEL once Pi Durable's sanitizer allows them through.
 4. The host renders tool output through `ConductorWeb.AnsiOutput`: it interprets supported SGR formatting and strips remaining terminal control sequences before output is rendered. Raw terminal controls are never passed through as active browser markup.
 
+## Rendering choice
+
+`ansi_to_html` 0.6.0 was evaluated through source review and runtime probes. It was not added: combined SGR/selective-reset behavior was unsuitable, malformed extended colors could crash conversion, and unsupported codes could create unbounded atoms. Client-side converters would also leave escaping and streamed DOM ownership split between the server and browser.
+
+`ConductorWeb.AnsiOutput.render/1` instead returns escaped text and generated inline spans. Only fixed formatting declarations and validated numeric colors become CSS; input never becomes a tag, attribute, URL, or atom. The stateless parser handles basic/bright, 256-color and RGB SGR, emphasis and resets, and safely withholds incomplete trailing escapes. Only tool-output panels use it; commands, file contents and diffs retain their existing text rendering and the output scroller remains attached to the server-updated `pre`.
+
 ## Reproducible sanitizer patch
 
 Pi Durable 1.1.0's `dist/harness/output.js` originally removed ESC (`0x1b`) and BEL (`0x07`) using `INVALID_OUTPUT`. ESC removal destroyed ANSI SGR and OSC sequences before either a live update or final durable result reached Conductor. BEL removal also truncated OSC sequences that use BEL as their terminator.

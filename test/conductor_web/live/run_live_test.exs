@@ -312,6 +312,101 @@ defmodule ConductorWeb.RunLiveTest do
     assert has_element?(view, "#items-ev-4-e-2 [data-label]", "You")
   end
 
+  test "ANSI output survives streaming boundaries, completion and reload", %{
+    conn: conn,
+    project: project
+  } do
+    run = run_fixture(project, "shop-58", %{status: :running})
+    {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
+
+    send_event = fn event ->
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => 4,
+        "role" => "head",
+        "event" => event
+      })
+    end
+
+    send_event.(%{
+      "type" => "tool_execution_start",
+      "toolCallId" => "ansi",
+      "toolName" => "bash",
+      "args" => %{"command" => "mix test"}
+    })
+
+    output = "\e[31m<script>failure & café</script>\e[0m\n[1m[30m[46m literal"
+
+    for {update, expected} <- [
+          {%{"set" => "\e[3"}, ""},
+          {%{"append" => "1m<script>failure & café</script>\e["},
+           "<script>failure & café</script>"},
+          {%{"append" => "0m\n[1m[30m[46m literal"},
+           "<script>failure & café</script>\n[1m[30m[46m literal"}
+        ] do
+      send_event.(%{
+        "type" => "tool_execution_update",
+        "toolCallId" => "ansi",
+        "toolName" => "bash",
+        "output" => update
+      })
+
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query("#live-tool-ansi-output")
+             |> LazyHTML.text() == expected
+
+      if expected != "" do
+        selector = "#live-tool-ansi-output"
+        assert has_element?(view, selector <> "[phx-hook='ToolOutputScroller']")
+        assert has_element?(view, selector <> " span[style], " <> selector <> " span[class]")
+      end
+
+      refute has_element?(view, "#live-tool-ansi script")
+      refute has_element?(view, "#live-tool-ansi [phx-update='ignore']")
+    end
+
+    call = %{"type" => "toolCall", "id" => "ansi", "name" => "bash", "arguments" => %{}}
+
+    result = %{
+      "role" => "toolResult",
+      "toolCallId" => "ansi",
+      "toolName" => "bash",
+      "content" => [%{"type" => "text", "text" => output}]
+    }
+
+    for {id, kind, message} <- [
+          {1, "pi.assistant", %{"content" => [call], "stopReason" => "toolUse"}},
+          {2, "pi.tool-result", result}
+        ] do
+      send_event.(%{
+        "type" => "message_end",
+        "entry" => %{"id" => id, "kind" => kind, "model" => [message]}
+      })
+    end
+
+    send_event.(%{"type" => "tool_execution_end", "toolCallId" => "ansi"})
+    {:ok, reloaded, _html} = live(conn, ~p"/runs/#{run.id}")
+
+    for current <- [view, reloaded] do
+      selector = "#tool-ansi-output"
+      assert has_element?(current, selector <> "[phx-hook='ToolOutputScroller']")
+      assert has_element?(current, selector <> " span[style], " <> selector <> " span[class]")
+
+      assert current
+             |> element(selector)
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.text() ==
+               "<script>failure & café</script>\n[1m[30m[46m literal"
+
+      refute has_element?(current, selector <> " script")
+      refute has_element?(current, "#tool-ansi [phx-update='ignore']")
+    end
+  end
+
   test "streams live text and tool output", %{conn: conn, project: project} do
     run = run_fixture(project, "shop-3", %{status: :running})
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
