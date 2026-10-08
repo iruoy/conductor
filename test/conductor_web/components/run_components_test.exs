@@ -4,15 +4,22 @@ defmodule ConductorWeb.RunComponentsTest do
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
   test "tool scroll boxes are named keyboard stops without region landmarks" do
-    for attrs <- [
-          [name: "bash", args: %{"command" => "echo one\necho two"}, output: "one\ntwo"],
-          [name: "write", args: %{"path" => "file", "content" => "contents"}],
-          [name: "edit", args: %{"path" => "file"}, diff: "-1 old\n+1 new"],
-          [name: "bash", args: %{}, output: "failed", error: true]
+    for {attrs, labels} <- [
+          {[name: "bash", args: %{"command" => "echo one\necho two"}, output: "one\ntwo"],
+           ["bash tool call", "bash output"]},
+          {[name: "write", args: %{"path" => "file", "content" => "contents"}],
+           ["Written file content"]},
+          {[name: "edit", args: %{"path" => "file"}, diff: "-1 old\n+1 new"], ["edit diff"]},
+          {[name: "bash", args: %{}, output: "failed", error: true], ["bash output"]},
+          {[name: "bash", output: "running", streaming: true], ["bash output"]}
         ] do
       html = render_component(&tool/1, attrs)
       blocks = find(html, "pre")
-      assert Enum.count(blocks) > 0
+      assert Enum.count(blocks) == length(labels)
+
+      for label <- labels do
+        assert found?(html, "pre[aria-label='#{label}']")
+      end
 
       assert Enum.count(blocks) ==
                Enum.count(
