@@ -818,8 +818,10 @@ defmodule ConductorWeb.RunLive do
 
       true ->
         socket = assign(socket, busy: awaiting?(item))
+        socket = assign(socket, :transcript_changes, [])
         socket = Enum.reduce(parts(item), socket, &add_part(&2, &1))
-        if socket.assigns.busy, do: socket, else: close_tail(socket)
+        socket = if socket.assigns.busy, do: socket, else: close_tail(socket)
+        flush_transcript_changes(socket)
     end
   end
 
@@ -930,11 +932,11 @@ defmodule ConductorWeb.RunLive do
     socket
     |> close_tail()
     |> assign(first_prompt: first, turn: %{started: sent_at(part), parts: []})
-    |> stream_insert(:items, part)
+    |> change_transcript(:insert, part)
   end
 
   # The answer ends the turn: what led up to it folds into one part. The steps at the end are closed in the fold
-  # itself; a stream item that is inserted and deleted in one go would stay.
+  # itself, without publishing an intermediate update.
   defp add_part(socket, %{kind: "text", final: true} = part) do
     turn = socket.assigns.turn
     tail = socket.assigns.groups[socket.assigns.tail]
@@ -946,15 +948,15 @@ defmodule ConductorWeb.RunLive do
       case work(%{turn | parts: closed}, part) do
         [%{kind: "work"} = work] ->
           closed
-          |> Enum.reduce(socket, &stream_delete(&2, :items, &1))
+          |> Enum.reduce(socket, &change_transcript(&2, :delete, &1))
           |> assign(tail: nil, groups: Map.drop(socket.assigns.groups, Enum.map(closed, & &1.id)))
-          |> stream_insert(:items, work)
+          |> change_transcript(:insert, work)
 
         _parts ->
           close_tail(socket)
       end
 
-    socket |> assign(turn: %{started: nil, parts: []}) |> stream_insert(:items, part)
+    socket |> assign(turn: %{started: nil, parts: []}) |> change_transcript(:insert, part)
   end
 
   defp add_part(socket, part), do: socket |> close_tail() |> put_part(part)
@@ -977,8 +979,34 @@ defmodule ConductorWeb.RunLive do
         do: Enum.map(turn.parts, &if(&1.id == part.id, do: part, else: &1)),
         else: turn.parts ++ [part]
 
-    socket |> assign(turn: %{turn | parts: parts}) |> stream_insert(:items, part)
+    socket |> assign(turn: %{turn | parts: parts}) |> change_transcript(:insert, part)
   end
+
+  # A message can update a group and then fold it, or add timing that immediately goes into the fold.
+  # LiveView keeps pending inserts even when stream_delete follows them in the same render. Publish only
+  # the last operation for each row so a folded row cannot be reinserted alongside its work group.
+  defp change_transcript(socket, operation, part) do
+    case socket.assigns[:transcript_changes] do
+      nil -> apply_transcript_change(socket, {operation, part})
+      changes -> assign(socket, :transcript_changes, [{operation, part} | changes])
+    end
+  end
+
+  defp flush_transcript_changes(socket) do
+    changes =
+      socket.assigns.transcript_changes
+      |> Enum.uniq_by(fn {_operation, part} -> part.id end)
+      |> Enum.reverse()
+
+    socket
+    |> assign(:transcript_changes, nil)
+    |> then(
+      &Enum.reduce(changes, &1, fn change, socket -> apply_transcript_change(socket, change) end)
+    )
+  end
+
+  defp apply_transcript_change(socket, {:insert, part}), do: stream_insert(socket, :items, part)
+  defp apply_transcript_change(socket, {:delete, part}), do: stream_delete(socket, :items, part)
 
   defp close_tail(socket) do
     case socket.assigns.groups[socket.assigns.tail] do
