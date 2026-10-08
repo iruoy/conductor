@@ -163,13 +163,21 @@ defmodule ConductorWeb.RunLiveTest do
       "role" => "toolResult",
       "toolCallId" => "t1",
       "toolName" => "bash",
-      "content" => "a.ex"
+      "content" => "a.ex",
+      "durationMs" => 250
     }
 
     answer = %{"type" => "text", "text" => "It is there."}
 
     send_entry.(1, "pi.user", %{"role" => "user", "content" => "Find it", "timestamp" => 1_000})
-    send_entry.(2, "pi.assistant", %{"content" => [looking, call], "stopReason" => "toolUse"})
+
+    send_entry.(2, "pi.assistant", %{
+      "content" => [looking, call],
+      "stopReason" => "toolUse",
+      "model" => "gpt-6.1-sol",
+      "durationMs" => 1500
+    })
+
     send_entry.(3, "pi.tool-result", result)
 
     # While the turn goes on, everything shows.
@@ -181,10 +189,41 @@ defmodule ConductorWeb.RunLiveTest do
     assert has_element?(view, "#items-ev-4-e-2-1")
     refute has_element?(view, "[data-work]")
 
-    stop = %{"content" => [answer], "stopReason" => "stop", "timestamp" => 126_000}
+    assert_unique_ids(view)
+    assert has_element?(view, "#tool-t1-duration", "250ms")
+    assert has_element?(view, "#ev-4-e-2-timing", "gpt-6.1-sol · 1.5s")
+
+    # Loading an unfinished turn must produce the same unique content.
+    {:ok, loaded, _} = live(conn, ~p"/runs/#{run.id}")
+    assert_unique_ids(loaded)
+
+    stop = %{
+      "content" => [answer],
+      "stopReason" => "stop",
+      "timestamp" => 126_000,
+      "model" => "gpt-6.1-sol",
+      "durationMs" => 2200
+    }
+
     send_entry.(4, "pi.assistant", stop)
 
-    folded = "#items-ev-4-e-2-0-work > details:not([open])"
+    assert_unique_ids(view)
+    assert_unique_ids(loaded)
+    assert has_element?(loaded, "[data-work] #tool-t1-duration", "250ms")
+    assert has_element?(loaded, "[data-work] #ev-4-e-4-timing", "gpt-6.1-sol · 2.2s")
+
+    assert view
+           |> render()
+           |> LazyHTML.from_fragment()
+           |> LazyHTML.query("#transcript [data-from=agent]")
+           |> Enum.count() == 2
+
+    refute has_element?(view, "#items-ev-4-e-2-timing")
+    refute has_element?(view, "#items-ev-4-e-4-timing")
+    assert has_element?(view, "[data-work] #tool-t1-duration", "250ms")
+    assert has_element?(view, "[data-work] #ev-4-e-4-timing", "gpt-6.1-sol · 2.2s")
+
+    folded = "#items-ev-4-e-2-timing-work > details:not([open])"
     assert has_element?(view, folded <> " > summary [data-row-text]", "Ran 1 command")
     assert has_element?(view, folded <> " > summary [data-row-meta]", "2m 5s")
     assert has_element?(view, folded <> " [data-work] [data-from=agent]", "Looking around.")
@@ -198,6 +237,19 @@ defmodule ConductorWeb.RunLiveTest do
     assert has_element?(view, folded <> " > summary [data-row-meta]", "2m 5s")
     assert has_element?(view, folded <> " [data-work] [data-from=agent]", "Looking around.")
     assert has_element?(view, "#items-ev-4-e-4-0 [data-from=agent]", "It is there.")
+    assert_unique_ids(view)
+  end
+
+  defp assert_unique_ids(view) do
+    ids =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("[id]")
+      |> LazyHTML.attribute("id")
+
+    duplicates = ids |> Enum.frequencies() |> Enum.filter(fn {_id, count} -> count > 1 end)
+    assert duplicates == []
   end
 
   test "shows the first prompt that arrives while the page is open as the issue", %{
