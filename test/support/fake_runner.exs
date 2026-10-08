@@ -135,6 +135,24 @@ defmodule FakeRunner do
     end
   end
 
+  defp handle(%{"type" => "resume_run", "run_id" => id} = c, state) do
+    case state[id] do
+      %{"status" => "settled", "settled" => %{"outcome" => "completed"}} = run ->
+        state = Map.put(state, id, %{run | "status" => "running", "settled" => nil})
+        reply(c, %{submission_id: 4, conversation_id: 1})
+
+        agent(id, %{
+          type: "message_end",
+          entry: %{id: 4, kind: "pi.user", model: [%{role: "user", content: c["text"]}]}
+        })
+
+        {:ok, state}
+
+      _ ->
+        error(c, "run #{id} is not ready for review feedback", state)
+    end
+  end
+
   defp handle(%{"type" => "abort", "run_id" => id} = c, state) do
     if state[id] do
       reply(c, %{status: "aborting"})

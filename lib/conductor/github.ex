@@ -441,6 +441,26 @@ defmodule Conductor.GitHub do
     end
   end
 
+  @doc "Reads the recorded PR from this repository; a board status is not proof of a merge."
+  def pull_request(repo, url) when is_binary(url) do
+    case Regex.run(~r{\Ahttps://github\.com/([^/]+)/([^/]+)/pull/(\d+)\z}, url) do
+      [_, owner, slug, number] when owner == repo.owner and slug == repo.slug ->
+        with {:ok, %{"state" => state, "merged" => merged} = pr} <-
+               request(url: "#{repo_path(repo)}/pulls/#{number}"),
+             true <- state in ["open", "closed"] and is_boolean(merged) do
+          {:ok, pr}
+        else
+          {:error, _} = error -> error
+          _ -> {:error, "GitHub returned an invalid pull request state"}
+        end
+
+      _ ->
+        {:error, "Invalid pull request URL for this repository"}
+    end
+  end
+
+  def pull_request(_repo, _url), do: {:error, "No pull request recorded"}
+
   ## HTTP
 
   defp repo_name(repo), do: "#{repo.owner}/#{repo.slug}"

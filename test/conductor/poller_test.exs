@@ -21,7 +21,7 @@ defmodule Conductor.PollerTest do
              Runs.list_by_status(["picked_up"]) |> Enum.map(& &1.id) |> Enum.sort()
 
     old =
-      run_fixture(project, "shop-3", %{status: :completed, workspace_path: Path.join(dir, "old")})
+      run_fixture(project, "shop-3", %{status: :merged, workspace_path: Path.join(dir, "old")})
 
     File.mkdir_p!(old.workspace_path)
 

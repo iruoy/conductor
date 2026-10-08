@@ -9,7 +9,7 @@ defmodule ConductorWeb.RunComponents do
 
   @doc """
   The status of a run as a pill with a dot, in the colours of the status: under way (`provisioning`, `running`,
-  `handing_off`) info, `waiting_for_input` warning, `completed` success, `failed` error, anything else neutral.
+  `handing_off`) info, `waiting_for_input` warning, `completed` in review, `merged` success, `failed` error, anything else neutral.
   The label is the status in words; `data-status` carries the status itself.
   """
   def status_badge(assigns) do
@@ -29,9 +29,13 @@ defmodule ConductorWeb.RunComponents do
   end
 
   @doc "A run status in words: `:waiting_for_input` is \"waiting for input\"."
+  def status_label(:running), do: "In progress"
+  def status_label(:completed), do: "In review"
+  def status_label(:merged), do: "Done"
   def status_label(status), do: String.replace(to_string(status), "_", " ")
 
-  defp badge_class(:completed), do: "bg-chip-success-bg text-chip-success-fg"
+  defp badge_class(:completed), do: "bg-chip-info-bg text-primary"
+  defp badge_class(:merged), do: "bg-chip-success-bg text-chip-success-fg"
   defp badge_class(:failed), do: "bg-chip-error-bg text-chip-error-fg"
   defp badge_class(:waiting_for_input), do: "bg-chip-warning-bg text-chip-warning-fg"
 

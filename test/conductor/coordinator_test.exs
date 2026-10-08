@@ -37,7 +37,7 @@ defmodule Conductor.CoordinatorTest do
                     %{
                       id: "shop-1-1",
                       status: :completed,
-                      pr_url: "https://github.com/pr/feature/1"
+                      pr_url: "https://github.com/acme/shop/pull/1"
                     }},
                    5_000
 

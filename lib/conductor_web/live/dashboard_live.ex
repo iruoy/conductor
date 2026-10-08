@@ -621,9 +621,10 @@ defmodule ConductorWeb.DashboardLive do
   defp filter_chips do
     [
       {:all, "All", nil},
-      {:running, "Running", "bg-dot-blue"},
+      {:running, "In progress", "bg-dot-blue"},
       {:waiting, "Waiting for input", "bg-dot-orange"},
-      {:completed, "Completed", "bg-dot-green"},
+      {:completed, "In review", "bg-primary"},
+      {:merged, "Done", "bg-dot-green"},
       {:failed, "Failed", "bg-dot-red"},
       {:picked_up, "Picked up", "bg-dot-grey"}
     ]

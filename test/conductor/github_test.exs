@@ -16,6 +16,31 @@ defmodule Conductor.GitHubTest do
     item_filter: nil
   }
 
+  test "reads PR state from the configured repository and validates the recorded URL" do
+    Req.Test.stub(GitHub, fn conn ->
+      assert conn.method == "GET"
+      assert conn.request_path == "/repos/acme/shop/pulls/60"
+      Req.Test.json(conn, %{"state" => "closed", "merged" => true})
+    end)
+
+    assert {:ok, %{"merged" => true}} =
+             GitHub.pull_request(@repo, "https://github.com/acme/shop/pull/60")
+
+    for url <- [
+          nil,
+          "https://github.com/other/shop/pull/60",
+          "https://example.com/acme/shop/pull/60",
+          "https://github.com/acme/shop/pull/nope"
+        ] do
+      assert {:error, _} = GitHub.pull_request(@repo, url)
+    end
+  end
+
+  test "malformed PR responses fail closed instead of allowing feedback" do
+    Req.Test.stub(GitHub, &Req.Test.json(&1, %{"state" => "open"}))
+    assert {:error, _} = GitHub.pull_request(@repo, "https://github.com/acme/shop/pull/60")
+  end
+
   defp item(number, fields \\ %{}) do
     Map.merge(
       %{

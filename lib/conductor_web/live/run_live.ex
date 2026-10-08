@@ -136,7 +136,7 @@ defmodule ConductorWeb.RunLive do
         <%!-- The oldest open question is answered here. Without one, what is typed goes to the head agent while it
         works; it waits in the agent's inbox until the tools that are running are done. --%>
         <div
-          :if={@open_questions != [] or not Run.terminal?(@run)}
+          :if={@open_questions != [] or @run.status == :completed or not Run.terminal?(@run)}
           id="prompt-bar"
           class={[
             "shrink-0 border-t border-base-300 px-3 py-2",
@@ -188,14 +188,19 @@ defmodule ConductorWeb.RunLive do
               </.chat_prompt>
             <% [] -> %>
               <.chat_prompt
-                :if={not Run.terminal?(@run)}
+                :if={@run.status == :completed or not Run.terminal?(@run)}
                 id="prompt"
                 phx-submit="message"
                 label="Message the head agent"
                 placeholder={prompt_placeholder(@run.status, head?(@conversations, @selected))}
-                hint="Waits in the agent's inbox until the tools that are running are done."
-                on_stop={@run.status != :handing_off && show_modal("confirm-abort")}
-                disabled={@run.status != :running}
+                hint={
+                  if(@run.status == :completed,
+                    do: "Continues this conversation and updates the same pull request.",
+                    else: "Waits in the agent's inbox until the tools that are running are done."
+                  )
+                }
+                on_stop={abortable?(@run) && show_modal("confirm-abort")}
+                disabled={@run.status not in [:running, :completed]}
               >
                 <:header :if={@inbox != []}>
                   <ul id="inbox" class="space-y-1">
@@ -465,7 +470,8 @@ defmodule ConductorWeb.RunLive do
   end
 
   # The colour of a status as a dot, as the status chip has it.
-  defp status_dot(:completed), do: "bg-dot-green"
+  defp status_dot(:completed), do: "bg-primary"
+  defp status_dot(:merged), do: "bg-dot-green"
   defp status_dot(:failed), do: "bg-dot-red"
   defp status_dot(:waiting_for_input), do: "bg-dot-orange"
   defp status_dot(:picked_up), do: "bg-dot-grey"
@@ -486,7 +492,8 @@ defmodule ConductorWeb.RunLive do
   end
 
   defp status_text(:failed), do: "text-chip-error-fg"
-  defp status_text(:completed), do: "text-chip-success-fg"
+  defp status_text(:completed), do: "text-primary"
+  defp status_text(:merged), do: "text-chip-success-fg"
   defp status_text(:waiting_for_input), do: "text-chip-warning-fg"
   defp status_text(:picked_up), do: "text-fg-secondary"
   defp status_text(_status), do: "text-chip-info-fg"
@@ -515,7 +522,7 @@ defmodule ConductorWeb.RunLive do
          |> push_event("prompt:sent", %{id: "prompt"})}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not send the message: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, message_error(reason))}
     end
   end
 
@@ -938,7 +945,8 @@ defmodule ConductorWeb.RunLive do
       head?(conversations, conversation) ->
         case run.status do
           :failed -> "failed"
-          :completed -> "done"
+          :completed -> "review"
+          :merged -> "done"
           :waiting_for_input -> "waiting"
           _status -> "working"
         end
@@ -960,9 +968,11 @@ defmodule ConductorWeb.RunLive do
   defp state_dot("working"), do: "bg-dot-blue"
   defp state_dot("waiting"), do: "bg-dot-orange"
   defp state_dot("done"), do: "bg-dot-green"
+  defp state_dot("review"), do: "bg-primary"
   defp state_dot("failed"), do: "bg-dot-red"
 
   defp state_text("waiting"), do: "waiting for input"
+  defp state_text("review"), do: "In review"
   defp state_text(state), do: state
 
   # What a tab says when it is pointed at: its state, so the dot is not the only way to tell, and for a subagent the
@@ -1003,6 +1013,21 @@ defmodule ConductorWeb.RunLive do
     end
   end
 
+  defp message_error(:pr_merged), do: "This pull request has been merged. The run is done."
+
+  defp message_error(:pr_closed),
+    do: "This pull request is closed. Reopen it before sending feedback."
+
+  defp message_error(:concurrency_limit),
+    do: "All agent slots are occupied. Try sending feedback when a slot is free."
+
+  defp message_error(:workspace_unavailable),
+    do: "The original workspace is unavailable; this run cannot be resumed."
+
+  defp message_error(:empty_message), do: "Enter a message first."
+  defp message_error(reason), do: "Could not send the message: #{inspect(reason)}"
+
+  defp prompt_placeholder(:completed, _head?), do: "Send review feedback to the agent"
   defp prompt_placeholder(:running, true), do: "Message the agent"
   defp prompt_placeholder(:running, false), do: "Message the head agent"
   defp prompt_placeholder(:handing_off, _head?), do: "Handing off…"

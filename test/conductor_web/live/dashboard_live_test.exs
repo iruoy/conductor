@@ -90,7 +90,7 @@ defmodule ConductorWeb.DashboardLiveTest do
           {3, "running", "bg-chip-info-bg"},
           {4, "waiting_for_input", "bg-chip-warning-bg"},
           {5, "handing_off", "bg-chip-info-bg"},
-          {6, "completed", "bg-chip-success-bg"},
+          {6, "completed", "bg-chip-info-bg"},
           {7, "failed", "bg-chip-error-bg"}
         ] do
       id = "shop-#{n}-1"
