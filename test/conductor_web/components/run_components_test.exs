@@ -172,7 +172,12 @@ defmodule ConductorWeb.RunComponentsTest do
     {[group], _} = transcript([assistant, result_item, next])
     html = show(group)
 
-    assert found?(html, "#context-details-#{group.id}:not([open]) > summary")
+    assert found?(
+             html,
+             "#context-details-#{group.id}.collapse:not([open]) > summary.collapse-title"
+           )
+
+    assert found?(html, "#context-details-#{group.id} > .collapse-content")
     refute found?(html, "details[open]")
 
     for id <- [1, 2, 3] do
@@ -194,7 +199,13 @@ defmodule ConductorWeb.RunComponentsTest do
   test "reset and compaction entries can be inspected" do
     for kind <- ["pi.reset", "pi.compaction"] do
       html = show(item(8, %{"id" => 4, "kind" => kind}))
-      assert found?(html, "#context-details-ev-8-e-4:not([open]) > summary")
+
+      assert found?(
+               html,
+               "#context-details-ev-8-e-4.collapse:not([open]) > summary.collapse-title"
+             )
+
+      assert found?(html, "#context-details-ev-8-e-4 > .collapse-content")
 
       assert found?(
                html,

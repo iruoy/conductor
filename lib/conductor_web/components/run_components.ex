@@ -962,12 +962,12 @@ defmodule ConductorWeb.RunComponents do
     <details
       :if={@context_entries != []}
       id={"context-details-#{@item.id}"}
-      class="text-xs text-fg-tertiary"
+      class="collapse text-xs text-fg-tertiary"
     >
-      <summary class="cursor-pointer text-right transition-colors hover:text-base-content">
+      <summary class="collapse-title min-h-0 px-1 py-1 text-right transition-colors hover:text-base-content">
         Context debug details
       </summary>
-      <div class="flex flex-wrap justify-end gap-2 py-1">
+      <div class="collapse-content flex flex-wrap justify-end gap-2 px-1">
         <button
           :for={ref <- @context_entries}
           id={"inspect-#{@item.id}-#{ref.entry}"}
