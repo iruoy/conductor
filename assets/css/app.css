@@ -248,6 +248,11 @@
   outline-offset: 1px;
 }
 
+/* Keep the focus indicator inside scroll boxes whose parents clip overflow. */
+.scrollable-output:focus-visible {
+  outline-offset: -2px;
+}
+
 /* Add variants based on LiveView classes */
 @custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
