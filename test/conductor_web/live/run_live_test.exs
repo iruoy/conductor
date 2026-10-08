@@ -15,6 +15,46 @@ defmodule ConductorWeb.RunLiveTest do
     %{project: project}
   end
 
+  test "shadow audit shows suggestions alongside unchanged chosen routing", %{
+    conn: conn,
+    project: project
+  } do
+    issue =
+      snapshot("shop-91", "Root", %{
+        "subtasks" => [snapshot("shop-92"), snapshot("shop-93", "Small", %{"size" => "S"})]
+      })
+
+    {:ok, run} = Runs.create_run(project, "shop-91", issue)
+    {:ok, run} = Runs.pump(run)
+    models = Map.new(~w(head low medium high), &{&1, %{"provider" => "test", "modelId" => &1}})
+    {:ok, run} = Runs.provision_end(run, %{models: models})
+
+    {:ok, _} =
+      Conductor.Classification.persist(run, fn _, _ ->
+        {:ok,
+         %{
+           "#92" => %{
+             "status" => "suggested",
+             "complexity" => "low",
+             "reason" => "Tiny change",
+             "provider" => "audit",
+             "model" => "judge",
+             "latency_ms" => 12
+           }
+         }}
+      end)
+
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+    assert has_element?(view, "#classification-audit", "Suggestions do not change routing")
+    assert has_element?(view, "[data-issue-key='#91']", "Chosen routing: head · test/head")
+    assert has_element?(view, "[data-issue-key='#92']", "Chosen routing: high · test/high")
+    assert has_element?(view, "[data-issue-key='#92']", "suggested · low")
+    assert has_element?(view, "[data-issue-key='#92']", "Tiny change")
+    assert has_element?(view, "[data-issue-key='#92']", "audit/judge")
+    assert has_element?(view, "[data-issue-key='#93']", "Chosen routing: low · test/low")
+    assert has_element?(view, "[data-issue-key='#93']", "explicit · low")
+  end
+
   test "empty setup output does not create a Conductor tab, but real logs remain accessible", %{
     conn: conn,
     project: project

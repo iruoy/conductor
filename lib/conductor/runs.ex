@@ -195,6 +195,7 @@ defmodule Conductor.Runs do
         :fail,
         :set_workspace_path,
         :set_branch,
+        :set_classifications,
         :clear_workspace
       ] do
     def unquote(action)(%Run{} = run, attrs \\ %{}) do

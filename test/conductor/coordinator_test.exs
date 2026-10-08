@@ -51,6 +51,9 @@ defmodule Conductor.CoordinatorTest do
     # The run keeps the models it was started with, whatever the settings say later.
     choice = %{"provider" => "faux", "modelId" => "faux-1"}
     assert run.models == Map.new(~w(head low medium high), &{&1, choice})
+    # Older/unavailable classifiers cannot prevent pickup. The audit is durable.
+    assert run.classifications["#4"]["status"] == "fallback"
+    assert run.classifications["#4"]["complexity"] == "high"
     settings_fixture(%{models: %{"head" => %{"provider" => "faux", "modelId" => "faux-2"}}})
     assert Runs.get_run!("shop-4-1").models["head"] == choice
     assert git!(run.workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"]) == "feature/4"
