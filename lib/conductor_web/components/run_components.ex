@@ -959,20 +959,29 @@ defmodule ConductorWeb.RunComponents do
 
     ~H"""
     <.transcript_body item={@item} />
-    <div :if={@context_entries != []} class="flex flex-wrap justify-end gap-2">
-      <button
-        :for={ref <- @context_entries}
-        id={"inspect-#{@item.id}-#{ref.entry}"}
-        type="button"
-        phx-click="inspect_context"
-        phx-value-conversation={ref.conversation}
-        phx-value-entry={ref.entry}
-        class="rounded px-1 text-[10px] text-fg-tertiary transition-colors hover:bg-base-200 hover:text-base-content"
-        title="Inspect reconstructed model context through this persisted entry"
-      >
-        Context · {ref.kind} #{ref.entry}
-      </button>
-    </div>
+    <details
+      :if={@context_entries != []}
+      id={"context-details-#{@item.id}"}
+      class="collapse text-xs text-fg-tertiary"
+    >
+      <summary class="collapse-title min-h-0 px-1 py-1 text-right transition-colors hover:text-base-content">
+        Context debug details
+      </summary>
+      <div class="collapse-content flex flex-wrap justify-end gap-2 px-1">
+        <button
+          :for={ref <- @context_entries}
+          id={"inspect-#{@item.id}-#{ref.entry}"}
+          type="button"
+          phx-click="inspect_context"
+          phx-value-conversation={ref.conversation}
+          phx-value-entry={ref.entry}
+          class="rounded px-1 text-xs transition-colors hover:bg-base-200 hover:text-base-content"
+          title="Inspect reconstructed model context through this persisted entry"
+        >
+          Inspect context · {ref.kind} #{ref.entry}
+        </button>
+      </div>
+    </details>
     """
   end
 

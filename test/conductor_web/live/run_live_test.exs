@@ -42,6 +42,13 @@ defmodule ConductorWeb.RunLiveTest do
     ingest.(5, "sub:child", 2, "Child prompt")
     {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
 
+    assert has_element?(
+             view,
+             "#context-details-ev-4-e-1:not([open]) > summary",
+             "Context debug details"
+           )
+
+    assert has_element?(view, "#context-details-ev-4-e-1 #inspect-ev-4-e-1-1")
     element(view, "#inspect-ev-4-e-1-1") |> render_click()
     render_async(view, 5_000)
     assert has_element?(view, "#context-content", "reconstructed 4:1")
@@ -63,6 +70,14 @@ defmodule ConductorWeb.RunLiveTest do
     assert has_element?(view, "#items-ev-4-e-3")
 
     element(view, "#tab-5") |> render_click()
+
+    assert has_element?(
+             view,
+             "#context-details-ev-5-e-2:not([open]) > summary",
+             "Context debug details"
+           )
+
+    assert has_element?(view, "#context-details-ev-5-e-2 #inspect-ev-5-e-2-2")
     element(view, "#inspect-ev-5-e-2-2") |> render_click()
     render_async(view, 5_000)
     assert has_element?(view, "#context-content", "reconstructed 5:2")
