@@ -66,6 +66,44 @@ defmodule Conductor.RunsTest do
     assert Enum.find(after_replay, &(&1.entry == "e:2")).payload == updated
   end
 
+  test "ANSI escapes survive JSONL decoding, transcript persistence and PubSub streaming" do
+    run = run_fixture(project_fixture(), "SHOP-56")
+    Runs.subscribe(run.id)
+
+    ansi = "\e[31mVitest output\e[0m"
+
+    entry = %{
+      "id" => 44,
+      "kind" => "pi.tool-result",
+      "model" => [
+        %{
+          "role" => "toolResult",
+          "toolCallId" => "ansi-call",
+          "toolName" => "bash",
+          "content" => [%{"type" => "text", "text" => ansi}],
+          "isError" => false
+        }
+      ]
+    }
+
+    message = %{
+      "type" => "agent_event",
+      "run_id" => run.id,
+      "conversation" => 7,
+      "role" => "head",
+      "event" => %{"type" => "message_end", "entry" => entry}
+    }
+
+    # Exercise one encoded stdout JSONL record through line framing and Phoenix's JSON decoder.
+    jsonl = Jason.encode!(message) <> "\n"
+    [line] = String.split(jsonl, "\n", trim: true)
+    decoded = Jason.decode!(line)
+    assert :ok = Runs.ingest(decoded)
+    assert_receive {:agent_event, %{event: %{"entry" => ^entry}}}
+    assert [%{payload: ^entry}] = Runs.list_events(run.id, 7)
+    assert List.first(entry["model"])["content"] == [%{"type" => "text", "text" => ansi}]
+  end
+
   test "replaying a snapshot twice is unique and uses one SQL statement per chunk" do
     run = run_fixture(project_fixture(), "SHOP-12")
     entries = for id <- 1..201, do: %{"id" => id, "kind" => "pi.assistant"}
