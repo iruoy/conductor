@@ -172,26 +172,42 @@ defmodule ConductorWeb.RunLiveTest do
     send_entry.(1, "pi.user", %{"role" => "user", "content" => "Find it", "timestamp" => 1_000})
 
     send_entry.(2, "pi.assistant", %{
-      "content" => [looking, call],
+      "content" => [looking, call, %{call | "id" => "t2"}],
       "stopReason" => "toolUse",
       "model" => "gpt-6.1-sol",
       "durationMs" => 1500
     })
 
     send_entry.(3, "pi.tool-result", result)
+    send_entry.(5, "pi.tool-result", %{result | "toolCallId" => "t2", "durationMs" => 600})
 
     # While the turn goes on, everything shows.
     assert has_element?(
              view,
-             "#items-ev-4-e-2-0[data-from=agent], #items-ev-4-e-2-0 [data-from=agent]"
+             "#items-ev-4-e-2-response [data-from=agent]"
            )
 
-    assert has_element?(view, "#items-ev-4-e-2-1")
+    assert has_element?(view, "#items-ev-4-e-2-response [data-tool=bash]")
     refute has_element?(view, "[data-work]")
 
     assert_unique_ids(view)
     assert has_element?(view, "#tool-t1-duration", "250ms")
+
+    assert has_element?(
+             view,
+             "#items-ev-4-e-2-response [data-response-content] #tool-t2-duration",
+             "600ms"
+           )
+
+    assert has_element?(
+             view,
+             "#items-ev-4-e-2-response [data-model-response] > header",
+             "gpt-6.1-sol · 1.5s"
+           )
+
     assert has_element?(view, "#ev-4-e-2-timing", "gpt-6.1-sol · 1.5s")
+    assert has_element?(view, "#inspect-ev-4-e-2-response-3[phx-value-entry='3']")
+    assert has_element?(view, "#inspect-ev-4-e-2-response-5[phx-value-entry='5']")
 
     # Loading an unfinished turn must produce the same unique content.
     {:ok, loaded, _} = live(conn, ~p"/runs/#{run.id}")
@@ -210,7 +226,12 @@ defmodule ConductorWeb.RunLiveTest do
     assert_unique_ids(view)
     assert_unique_ids(loaded)
     assert has_element?(loaded, "[data-work] #tool-t1-duration", "250ms")
-    assert has_element?(loaded, "[data-work] #ev-4-e-4-timing", "gpt-6.1-sol · 2.2s")
+
+    assert has_element?(
+             loaded,
+             "#items-ev-4-e-4-response [data-model-response] > #ev-4-e-4-timing",
+             "gpt-6.1-sol · 2.2s"
+           )
 
     assert view
            |> render()
@@ -221,22 +242,36 @@ defmodule ConductorWeb.RunLiveTest do
     refute has_element?(view, "#items-ev-4-e-2-timing")
     refute has_element?(view, "#items-ev-4-e-4-timing")
     assert has_element?(view, "[data-work] #tool-t1-duration", "250ms")
-    assert has_element?(view, "[data-work] #ev-4-e-4-timing", "gpt-6.1-sol · 2.2s")
 
-    folded = "#items-ev-4-e-2-timing-work > details:not([open])"
-    assert has_element?(view, folded <> " > summary [data-row-text]", "Ran 1 command")
+    assert has_element?(
+             view,
+             "#items-ev-4-e-4-response [data-model-response] > #ev-4-e-4-timing",
+             "gpt-6.1-sol · 2.2s"
+           )
+
+    folded = "#items-ev-4-e-2-response-work > details:not([open])"
+    assert has_element?(view, folded <> " > summary [data-row-text]", "Ran 2 commands")
     assert has_element?(view, folded <> " > summary [data-row-meta]", "2m 5s")
     assert has_element?(view, folded <> " [data-work] [data-from=agent]", "Looking around.")
     assert has_element?(view, folded <> " [data-work] [data-tool=bash]", "a.ex")
+
+    assert has_element?(
+             view,
+             folded <> " [data-work] [data-model-response] > header",
+             "gpt-6.1-sol · 1.5s"
+           )
+
+    assert has_element?(view, folded <> " [data-response-content] #tool-t2-duration", "600ms")
+    refute has_element?(view, "[data-work] #ev-4-e-4-timing")
     refute has_element?(view, "#items-ev-4-e-2-0")
     refute has_element?(view, "#items-ev-4-e-2-1")
-    assert has_element?(view, "#items-ev-4-e-4-0 [data-from=agent]", "It is there.")
+    assert has_element?(view, "#items-ev-4-e-4-response [data-from=agent]", "It is there.")
 
     # The same shows after a reload.
     {:ok, view, _html} = live(conn, ~p"/runs/#{run.id}")
     assert has_element?(view, folded <> " > summary [data-row-meta]", "2m 5s")
     assert has_element?(view, folded <> " [data-work] [data-from=agent]", "Looking around.")
-    assert has_element?(view, "#items-ev-4-e-4-0 [data-from=agent]", "It is there.")
+    assert has_element?(view, "#items-ev-4-e-4-response [data-from=agent]", "It is there.")
     assert_unique_ids(view)
   end
 

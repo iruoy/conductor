@@ -149,7 +149,7 @@ defmodule ConductorWeb.RunComponents do
         %{kind: "pi.user"} = part, {shown, turn} ->
           {[part | Enum.reverse(turn.parts, shown)], %{started: sent_at(part), parts: []}}
 
-        %{kind: "text", final: true} = part, {shown, turn} ->
+        %{final: true} = part, {shown, turn} ->
           {[part | Enum.reverse(work(turn, part), shown)], %{started: nil, parts: []}}
 
         part, {shown, turn} ->
@@ -160,7 +160,9 @@ defmodule ConductorWeb.RunComponents do
   end
 
   @doc "What a turn shows once `answer` ends it: its parts as one, unless there is hardly anything to fold."
-  def work(%{parts: parts}, _answer) when length(parts) < 2, do: parts
+  def work(%{parts: []}, _answer), do: []
+
+  def work(%{parts: [%{kind: kind}] = parts}, _answer) when kind != "response", do: parts
 
   def work(%{parts: [first | _] = parts, started: started}, answer) do
     ms = if started && answer.at, do: answer.at - started
@@ -171,8 +173,9 @@ defmodule ConductorWeb.RunComponents do
   def sent_at(%{kind: "pi.user", payload: payload}), do: message(payload)["timestamp"]
 
   @doc """
-  The parts an item shows as. An assistant message falls apart into its texts and the groups of steps around
-  them; anything else is its own part.
+  The parts an item shows as. Timed assistant messages keep their texts and steps together in a response
+  with a model-duration header. Older messages without timing fall apart into texts and groups of steps;
+  anything else is its own part.
   """
   def parts(%{kind: "pi.assistant", id: id, payload: payload} = item) do
     message = message(payload)
@@ -183,26 +186,34 @@ defmodule ConductorWeb.RunComponents do
       |> Enum.flat_map(fn {block, index} -> part("#{id}-#{index}", block) end)
       |> join_steps()
 
-    timing =
+    shown =
+      case stop_notice(message) do
+        nil -> answer(parts, message)
+        notice -> parts ++ [%{id: "#{id}-error", kind: "error", text: notice}]
+      end
+
+    # Nested calls need the conversation reference too, so their results remain inspectable.
+    shown = Enum.map(shown, &Map.put(&1, :context_entries, item[:context_entries] || []))
+
+    shown =
       if valid_duration?(message["durationMs"]) do
+        final = match?(%{final: true}, List.last(shown))
+
         [
           %{
-            id: "#{id}-timing",
-            kind: "model-timing",
+            id: "#{id}-response",
+            kind: "response",
+            parts: shown,
             ms: message["durationMs"],
-            model: message["model"] || "Model"
+            model: message["model"] || "Model",
+            final: final,
+            at: message["timestamp"],
+            active: false
           }
         ]
       else
-        []
+        shown
       end
-
-    shown =
-      timing ++
-        case stop_notice(message) do
-          nil -> answer(parts, message)
-          notice -> parts ++ [%{id: "#{id}-error", kind: "error", text: notice}]
-        end
 
     shown = if shown == [] and item[:context_entries] not in [nil, []], do: [item], else: shown
     Enum.map(shown, &Map.put(&1, :context_entries, item[:context_entries] || []))
@@ -293,12 +304,14 @@ defmodule ConductorWeb.RunComponents do
 
   @doc "The ids of the tool calls in a group of steps."
   def call_ids(%{kind: "steps", steps: steps}), do: for(%{type: :tool, id: id} <- steps, do: id)
+  def call_ids(%{kind: "response", parts: parts}), do: Enum.flat_map(parts, &call_ids/1)
   def call_ids(_part), do: []
 
   @doc "The calls in a group of steps that have no result yet."
   def open_calls(%{kind: "steps", steps: steps}),
     do: for(%{type: :tool, id: id, result: nil} <- steps, do: id)
 
+  def open_calls(%{kind: "response", parts: parts}), do: Enum.flat_map(parts, &open_calls/1)
   def open_calls(_part), do: []
 
   @doc "The id of the tool call a tool result answers."
@@ -330,6 +343,14 @@ defmodule ConductorWeb.RunComponents do
         else: []
 
     group |> Map.put(:steps, steps) |> Map.put(:context_entries, Enum.uniq(refs ++ results_refs))
+  end
+
+  defp put_results(%{kind: "response"} = response, results) do
+    parts = Enum.map(response.parts, &put_results(&1, results))
+    refs = Enum.flat_map(parts, &(&1[:context_entries] || []))
+
+    %{response | parts: parts}
+    |> Map.put(:context_entries, Enum.uniq((response[:context_entries] || []) ++ refs))
   end
 
   defp put_results(part, _results), do: part
@@ -898,6 +919,13 @@ defmodule ConductorWeb.RunComponents do
     """
   end
 
+  defp response_steps(%{kind: "steps", steps: steps}), do: steps
+
+  defp response_steps(%{kind: "response", parts: parts}),
+    do: Enum.flat_map(parts, &response_steps/1)
+
+  defp response_steps(_), do: []
+
   attr :item, :map, required: true
 
   def transcript_item(assigns) do
@@ -934,16 +962,24 @@ defmodule ConductorWeb.RunComponents do
     """
   end
 
-  defp transcript_body(%{item: %{kind: "model-timing"}} = assigns) do
+  defp transcript_body(%{item: %{kind: "response"}} = assigns) do
     ~H"""
-    <div
-      id={@item.id}
-      data-model-duration
-      title="Recorded model response time"
-      class="text-[11px] tabular-nums text-fg-tertiary"
-    >
-      {@item.model} · {execution_duration(@item.ms)}
-    </div>
+    <section data-model-response class="overflow-hidden rounded-md border border-base-300">
+      <header
+        id={String.replace_suffix(@item.id, "-response", "-timing")}
+        data-model-duration
+        title="Recorded model response time (not tool execution time)"
+        class="border-b border-base-300 bg-base-200/50 px-3 py-1.5 text-[11px] tabular-nums text-fg-tertiary"
+      >
+        {@item.model} · {execution_duration(@item.ms)}
+      </header>
+      <div data-response-content class="space-y-1.5 p-3">
+        <.transcript_body
+          :for={part <- @item.parts}
+          item={if part.kind == "steps", do: %{part | active: @item.active}, else: part}
+        />
+      </div>
+    </section>
     """
   end
 
@@ -978,7 +1014,7 @@ defmodule ConductorWeb.RunComponents do
   end
 
   defp transcript_body(%{item: %{kind: "work"}} = assigns) do
-    steps = for %{kind: "steps", steps: steps} <- assigns.item.parts, step <- steps, do: step
+    steps = Enum.flat_map(assigns.item.parts, &response_steps/1)
     assigns = assign(assigns, text: summary(steps), note: failed(steps))
 
     ~H"""
