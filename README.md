@@ -37,6 +37,7 @@ the migration fails rather than deleting or rewriting historical runs.
 Models come from pi-ai: the OpenAI subscription login in `~/.pi/agent/auth.json` (log in with `pi`; refreshes are
 shared with it through the same file lock), plus any provider whose API key is in the environment
 (`ANTHROPIC_API_KEY`, ...). Pick the head and per-complexity models on `/config`.
+Optional [missing-Size classifier suggestions](docs/complexity-classifier.md) are shadow-only and disabled by default.
 
 ### Local environment variables
 

@@ -89,6 +89,7 @@ defmodule Conductor.Runs.Run do
       :error,
       :pr_url,
       :models,
+      :classifications,
       :project_id,
       :inserted_at,
       :updated_at
@@ -117,6 +118,10 @@ defmodule Conductor.Runs.Run do
 
     update :set_workspace_path do
       accept [:workspace_path]
+    end
+
+    update :set_classifications do
+      accept [:classifications]
     end
 
     update :set_branch do
@@ -203,6 +208,7 @@ defmodule Conductor.Runs.Run do
     # The model choices the runner got in `start_run`, by role (`head`, `low`, `medium`, `high`), each
     # `%{"provider" => _, "modelId" => _, "reasoning" => _}`. A run from before they were kept has none.
     attribute :models, :map, public?: true
+    attribute :classifications, :map, public?: true
     create_timestamp :inserted_at, type: :utc_datetime
     update_timestamp :updated_at, type: :utc_datetime
   end

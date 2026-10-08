@@ -404,7 +404,55 @@ defmodule ConductorWeb.RunLive do
         </dd>
       </dl>
       <.timeline :if={@history != []} history={@history} />
+      <.classification_audit run={@run} />
     </aside>
+    """
+  end
+
+  attr :run, Run, required: true
+
+  defp classification_audit(assigns) do
+    snapshot = assigns.run.issue_snapshot || %{}
+    issues = [snapshot | snapshot["subtasks"] || []]
+
+    rows =
+      Enum.map(issues, fn issue ->
+        key = issue["key"] || assigns.run.issue_key
+        tier = if issue == snapshot, do: "head", else: Conductor.Prompt.complexity(issue)
+        models = assigns.run.models || %{}
+        chosen = models[tier] || models["high"] || models["head"]
+        audit = (assigns.run.classifications || %{})[key]
+        suggested = if audit, do: models[audit["complexity"]] || models["head"]
+        %{key: key, tier: tier, chosen: chosen, audit: audit, suggested: suggested}
+      end)
+
+    assigns = assign(assigns, :rows, rows)
+
+    ~H"""
+    <section id="classification-audit" class="border-t border-base-300 pt-2.5">
+      <h2 class="text-fg-secondary">Size audit · shadow mode</h2>
+      <p class="mt-1 text-fg-secondary">Suggestions do not change routing.</p>
+      <div :for={row <- @rows} data-issue-key={row.key} class="mt-2 space-y-1">
+        <h3 class="font-mono">{row.key}</h3>
+        <p>
+          Chosen routing: {row.tier} · {if row.chosen, do: model_id(row.chosen), else: "Not recorded"}
+        </p>
+        <%= if row.audit do %>
+          <p>{row.audit["status"]} · {row.audit["complexity"]}</p>
+          <p :if={row.audit["status"] == "suggested"}>
+            Suggested routing: {row.audit["complexity"]} · {if row.suggested,
+              do: model_id(row.suggested),
+              else: "Not configured"}
+          </p>
+          <p class="break-words text-fg-secondary">{row.audit["reason"]}</p>
+          <p class="break-all text-fg-secondary">
+            {row.audit["provider"] || "—"}/{row.audit["model"] || "—"} · {row.audit["latency_ms"]} ms
+          </p>
+        <% else %>
+          <p class="text-fg-secondary">Not recorded</p>
+        <% end %>
+      </div>
+    </section>
     """
   end
 

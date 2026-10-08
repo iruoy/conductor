@@ -24,6 +24,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { agentChoice, answerText, createConductorExtensions, type GithubConfig, githubFromEnv } from "./agent.ts";
 import { probeDefaultLevel } from "./defaults.ts";
+import { classifyIssue, parseIssue } from "./classifier.ts";
 import { contextPage, environmentSecrets } from "./context-inspection.ts";
 import { type GithubRun, type ModelMap, type RunRecord, RunsDoc, type Settled } from "./state.ts";
 
@@ -107,6 +108,11 @@ export class Runner {
 		switch (command.type) {
 			case "hello":
 				return { version: VERSION, resumed: this.resumed };
+			case "classify_issue": {
+				const runId = str(command, "run_id");
+				const issue = parseIssue(command.issue);
+				return this.serial(`classifier:${runId}`, () => classifyIssue(this.harness, this.models, runId, issue));
+			}
 			case "models":
 				return this.listModels();
 			case "model_default":

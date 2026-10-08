@@ -265,6 +265,7 @@ defmodule Conductor.Coordinator do
          models when is_map(models) <-
            run.models || Config.run_models(Config.get_settings()) ||
              {:error, "no head model configured"},
+         _ <- Conductor.Classification.persist(run),
          prompt = Prompt.render(run.issue_snapshot, project, ws.branch, ws.base),
          command = %{
            type: "start_run",
