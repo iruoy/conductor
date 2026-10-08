@@ -38,6 +38,21 @@ Models come from pi-ai: the OpenAI subscription login in `~/.pi/agent/auth.json`
 shared with it through the same file lock), plus any provider whose API key is in the environment
 (`ANTHROPIC_API_KEY`, ...). Pick the head and per-complexity models on `/config`.
 
+### Local environment variables
+
+In development, Dotenvy automatically loads `.env` from the project root when Conductor starts.
+Copy the example and add your token:
+
+```sh
+cp .env.example .env
+# Edit .env, then start normally:
+mix phx.server
+```
+
+`.env` is ignored by Git. Existing shell environment variables take precedence over `.env` values,
+and the Node runner inherits the loaded variables. Restart Conductor after changing `.env`.
+The file is optional and is not loaded in tests or production; use environment variables there.
+
 Environment:
 
 | Variable | Used for |

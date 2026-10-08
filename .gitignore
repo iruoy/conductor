@@ -39,3 +39,7 @@ npm-debug.log
 
 # Editor language server
 /.elixir_ls/
+
+
+# dotenv
+/.env
