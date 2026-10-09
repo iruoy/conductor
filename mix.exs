@@ -112,7 +112,8 @@ defmodule Conductor.MixProject do
         "format",
         "ash.codegen --check",
         "cmd node --test assets/js/tool_output_scroller.test.mjs",
-        "test"
+        "cmd --cd runner pnpm test",
+        "test --warnings-as-errors"
       ]
     ]
   end
