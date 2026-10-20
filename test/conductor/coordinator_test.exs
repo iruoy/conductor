@@ -144,6 +144,17 @@ defmodule Conductor.CoordinatorTest do
     assert_receive {:run_updated, %{id: "shop-8-1", status: :running}}, 10_000
     coordinator = Process.whereis(Coordinator)
 
+    # :running is broadcast before provisioning's final reads finish. Killing that task during a shared
+    # sandbox query disconnects the test transaction, so wait for provisioning to leave the database first.
+    for pid <- Task.Supervisor.children(Conductor.Jobs) do
+      ref = Process.monitor(pid)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, reason} when reason in [:normal, :noproc],
+                     5_000
+    end
+
+    assert :sys.get_state(coordinator).jobs == %{}
+
     # The fake keeps no state, so the restarted runner does not know the run.
     assert {:error, :runner_exited} = Runner.call(%{type: "crash"})
 
