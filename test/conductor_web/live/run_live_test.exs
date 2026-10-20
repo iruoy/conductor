@@ -15,6 +15,30 @@ defmodule ConductorWeb.RunLiveTest do
     %{project: project}
   end
 
+  test "compaction warnings survive reload and clear when the runner reports recovery", %{
+    conn: conn,
+    project: project
+  } do
+    run = run_fixture(project, "compact-1", %{status: :running})
+    event = %{"type" => "compaction_status", "failure" => %{"error" => "Provider unavailable"}}
+
+    message = %{
+      "type" => "agent_event",
+      "run_id" => run.id,
+      "conversation" => 1,
+      "role" => "head",
+      "event" => event
+    }
+
+    Runs.ingest(message)
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+    assert has_element?(view, "#compaction-failure[role=alert]", "Provider unavailable")
+    Runs.ingest(%{message | "event" => %{"type" => "compaction_status", "failure" => nil}})
+    refute has_element?(view, "#compaction-failure")
+    {:ok, reloaded, _} = live(conn, ~p"/runs/#{run.id}")
+    refute has_element?(reloaded, "#compaction-failure")
+  end
+
   test "shadow audit shows suggestions alongside unchanged chosen routing", %{
     conn: conn,
     project: project

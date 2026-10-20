@@ -4,6 +4,24 @@ defmodule Conductor.RunsTest do
   require Ash.Query
   alias Conductor.Runs
 
+  test "compaction failures survive reloads without changing transcript or conversation state" do
+    run = run_fixture(project_fixture(), "COMPACT-1", %{status: :running})
+    ingest(run, %{"type" => "message_end", "entry" => %{"id" => 1, "kind" => "pi.user"}})
+    failure = %{"taskId" => 7, "reason" => "threshold", "error" => "Provider unavailable"}
+    ingest(run, %{"type" => "compaction_status", "failure" => failure})
+    assert Runs.compaction_failures(run.id) == %{1 => "Provider unavailable"}
+    assert [%{kind: "pi.user"}] = Runs.list_events(run.id)
+    assert Runs.conversation_ends(run.id) == %{1 => :working}
+
+    ingest(run, %{"type" => "snapshot", "entries" => [], "compactionFailure" => failure})
+    assert Runs.compaction_failures(run.id) == %{1 => "Provider unavailable"}
+    ingest(run, %{"type" => "compaction_status", "failure" => nil})
+    assert Runs.compaction_failures(run.id) == %{}
+    ingest(run, %{"type" => "compaction_status", "failure" => failure})
+    ingest(run, %{"type" => "snapshot", "entries" => []})
+    assert Runs.compaction_failures(run.id) == %{}
+  end
+
   test "messages, tool starts and notes are ordered by conversation, position and id" do
     run = run_fixture(project_fixture(), "SHOP-1")
     user = %{"id" => 1, "kind" => "pi.user"}

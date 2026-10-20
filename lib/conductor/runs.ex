@@ -235,7 +235,7 @@ defmodule Conductor.Runs do
   def list_events(run_id, conversation \\ nil) do
     query =
       Event
-      |> Ash.Query.filter(run_id == ^run_id)
+      |> Ash.Query.filter(run_id == ^run_id and kind != "conductor.compaction_status")
       |> Ash.Query.sort([:conversation, :position, :id])
 
     query =
@@ -300,7 +300,7 @@ defmodule Conductor.Runs do
   def conversation_ends(run_id) do
     Repo.all(
       from e in Event,
-        where: e.run_id == ^run_id and e.kind != "pi.system",
+        where: e.run_id == ^run_id and e.kind not in ["pi.system", "conductor.compaction_status"],
         distinct: e.conversation,
         order_by: [e.conversation, desc: e.id],
         select: {e.conversation, e.kind, fragment("? #>> '{model,0,stopReason}'", e.payload)}
@@ -337,6 +337,20 @@ defmodule Conductor.Runs do
   end
 
   def entry_model(_message), do: nil
+
+  @doc "Persistent compaction failures by conversation, separate from transcript entries."
+  def compaction_failures(run_id) do
+    Event
+    |> Ash.Query.filter(run_id == ^run_id and kind == "conductor.compaction_status")
+    |> Ash.read!()
+    |> Enum.flat_map(fn event ->
+      case event.payload["failure"] do
+        %{"error" => error} when is_binary(error) -> [{event.conversation, error}]
+        _ -> []
+      end
+    end)
+    |> Map.new()
+  end
 
   @doc "Adds a note from Conductor itself (such as setup output) to the run's transcript, as conversation 0."
   def record_note(run_id, key, payload) do
@@ -379,8 +393,16 @@ defmodule Conductor.Runs do
 
   def ingest(_event), do: :ok
 
-  defp persist(run_id, conversation, role, %{"type" => "snapshot", "entries" => entries}) do
-    entries |> Enum.map(&entry_row(run_id, conversation, role, &1)) |> upsert_events()
+  defp persist(run_id, conversation, role, %{"type" => "snapshot", "entries" => entries} = event) do
+    rows = Enum.map(entries, &entry_row(run_id, conversation, role, &1))
+
+    upsert_events(
+      rows ++ [compaction_row(run_id, conversation, role, event["compactionFailure"])]
+    )
+  end
+
+  defp persist(run_id, conversation, role, %{"type" => "compaction_status"} = event) do
+    persist_compaction(run_id, conversation, role, event["failure"])
   end
 
   defp persist(run_id, conversation, role, %{"type" => "message_end", "entry" => entry}) do
@@ -396,6 +418,16 @@ defmodule Conductor.Runs do
   end
 
   defp persist(_run_id, _conversation, _role, _event), do: :ok
+
+  defp persist_compaction(run_id, conversation, role, failure) do
+    upsert_events([compaction_row(run_id, conversation, role, failure)])
+  end
+
+  defp compaction_row(run_id, conversation, role, failure) do
+    row(run_id, conversation, role, "s:compaction", nil, "conductor.compaction_status", %{
+      "failure" => failure
+    })
+  end
 
   defp entry_row(run_id, conversation, role, %{"id" => id, "kind" => kind} = entry) do
     row(run_id, conversation, role, "e:#{id}", id, kind, entry)

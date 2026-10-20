@@ -21,7 +21,10 @@ defmodule ConductorWeb.RunLive do
      )
      |> assign(attempts: Runs.other_attempts(run), history: Runs.status_history(id))
      |> assign(inbox: [], sent: %{}, models: Runs.conversation_models(id))
-     |> assign(ends: Runs.conversation_ends(id))
+     |> assign(
+       ends: Runs.conversation_ends(id),
+       compaction_failures: Runs.compaction_failures(id)
+     )
      |> assign_questions()
      |> select(default_conversation(conversations))}
   end
@@ -66,6 +69,18 @@ defmodule ConductorWeb.RunLive do
             <.pulse_dot pulse={state == "working"} class={["size-1.5", state_dot(state)]} />
             {label}
           </button>
+        </div>
+
+        <div
+          :if={@compaction_failures[@selected]}
+          id="compaction-failure"
+          role="alert"
+          class="alert alert-warning shrink-0 rounded-none py-2 text-xs"
+        >
+          <.icon name="hero-exclamation-triangle-micro" class="size-4 shrink-0" />
+          <span class="min-w-0 whitespace-pre-wrap break-words">
+            Context compaction failed: {@compaction_failures[@selected]}
+          </span>
         </div>
 
         <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -632,7 +647,12 @@ defmodule ConductorWeb.RunLive do
   def handle_info({:agent_event, %{conversation: conversation, role: role, event: event}}, socket) do
     # Messages go to the head agent, whichever conversation is on show.
     socket = if role == "head", do: track_inbox(socket, event), else: socket
-    socket = socket |> track_model(conversation, event) |> track_end(conversation, event)
+
+    socket =
+      socket
+      |> track_model(conversation, event)
+      |> track_end(conversation, event)
+      |> track_compaction(conversation, event)
 
     socket =
       if List.keymember?(socket.assigns.conversations, conversation, 0) do
@@ -648,6 +668,27 @@ defmodule ConductorWeb.RunLive do
     else
       {:noreply, socket}
     end
+  end
+
+  defp track_compaction(socket, conversation, %{"type" => "snapshot"} = event),
+    do: put_compaction(socket, conversation, event["compactionFailure"])
+
+  defp track_compaction(socket, conversation, %{"type" => "compaction_status"} = event),
+    do: put_compaction(socket, conversation, event["failure"])
+
+  defp track_compaction(socket, _conversation, _event), do: socket
+
+  defp put_compaction(socket, conversation, failure) do
+    failures =
+      case failure do
+        %{"error" => error} when is_binary(error) ->
+          Map.put(socket.assigns.compaction_failures, conversation, error)
+
+        _ ->
+          Map.delete(socket.assigns.compaction_failures, conversation)
+      end
+
+    assign(socket, compaction_failures: failures)
   end
 
   # What waits in the head agent's inbox: the messages it has not read yet.

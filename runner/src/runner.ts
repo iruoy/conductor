@@ -8,6 +8,9 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type Models, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	type AgentEvent,
+	type CompactionFailure,
+	type SessionEnd,
+	LiveDoc,
 	type AgentEventStream,
 	type ConversationId,
 	configure,
@@ -95,6 +98,12 @@ export class Runner {
 			},
 			options.context ?? ctx,
 		);
+		void runner.harness.closed.then((end) => {
+			if (end.reason === "failed") {
+				runner.closed = true;
+				runner.emit({ type: "log", level: "error", message: "Runner storage failed; restarting from durable state." });
+			}
+		});
 		runner.conductor = conductor;
 		runner.harness.resume();
 		const state = await runner.state();
@@ -144,6 +153,11 @@ export class Runner {
 		} catch (error) {
 			this.emitRaw({ type: "reply", id: command.id ?? null, ok: false, error: (error as Error).message ?? String(error) });
 		}
+	}
+
+	/** A failed Session cannot accept more work; the port host must restart this process. */
+	get sessionEnd(): Promise<SessionEnd> {
+		return this.harness.closed;
 	}
 
 	async close(): Promise<void> {
@@ -453,11 +467,16 @@ export class Runner {
 		if (streams.has(conversationId)) return;
 		const stream = await watchEvents(this.harness, conversationId as ConversationId, ctx);
 		streams.set(conversationId, stream);
-		const send = (event: AgentEvent) =>
+		const send = (event: AgentEvent | { type: "compaction_status"; failure: CompactionFailure | null }) =>
 			this.emit({ type: "agent_event", run_id: runId, conversation: conversationId, role, event });
 		send(stream.snapshot);
 		stream.start(async (events) => {
 			for (const event of events) send(event);
+			if (events.some((event) => event.type === "compaction_end")) {
+				// An aborted/no-op compaction does not clear an earlier failure. Read the authoritative state.
+				const live = await this.harness.snapshot(LiveDoc, conversationId as ConversationId, ctx);
+				send({ type: "compaction_status", failure: live?.compactionFailure ?? null });
+			}
 		});
 	}
 

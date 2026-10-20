@@ -6,7 +6,7 @@ import { type FauxResponseStep, fauxAssistantMessage, fauxProvider, fauxToolCall
 import { createModels } from "@earendil-works/pi-ai/models";
 import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { waves } from "../src/agent.ts";
 import { levelForEffort } from "../src/defaults.ts";
 import { type Event, parseVerdict, Runner } from "../src/runner.ts";
@@ -54,6 +54,25 @@ afterEach(async () => {
 });
 
 describe("runner protocol", () => {
+	it("reports a failed storage session once and stops accepting work", async () => {
+		const storage = new MemoryStorage();
+		const { runner, events } = await setup([], storage);
+		vi.spyOn(storage, "commit").mockRejectedValueOnce(new Error("disk failed"));
+		await expect(start(runner, "STORAGE-1-1")).rejects.toThrow();
+		expect(await runner.sessionEnd).toMatchObject({ reason: "failed" });
+		await expect(start(runner, "STORAGE-2-1")).rejects.toThrow();
+		expect(events.filter((event) => event.type === "log" && event.message === "Runner storage failed; restarting from durable state.")).toEqual([
+			expect.objectContaining({ level: "error", message: "Runner storage failed; restarting from durable state." }),
+		]);
+	});
+
+	it("distinguishes a normal shutdown from a failed session", async () => {
+		const { runner, events } = await setup([]);
+		await runner.close();
+		expect(await runner.sessionEnd).toEqual({ reason: "closed" });
+		expect(events.some((event) => event.type === "log")).toBe(false);
+	});
+
 	it("emits ready, streams events, and settles a run", async () => {
 		const { runner, events } = await setup([fauxAssistantMessage("Implemented it.\n\nDONE")]);
 		expect(events[0]).toMatchObject({ type: "ready", resumed: [] });
