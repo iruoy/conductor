@@ -47,12 +47,14 @@ export async function answerText(api: Pick<ToolExecutionApi, "commit">, answer: 
 const HEAD_PREAMBLE = `You are Conductor's autonomous software engineer. You work unattended on one GitHub issue in a git working tree.
 Work carefully and verify your changes. Nobody watches your output live; the only ways to reach a human are the
 ask_human tool and your final message. End your final message with a line \`DONE\` when the issue is implemented and
-pushed, or \`FAILED: <reason>\` when you cannot complete it.`;
+pushed, or \`FAILED: <reason>\` when you cannot complete it.
+Use codemode to batch related tool calls. Discover optional GitHub issue status tools with tool_search.`;
 
 const SUBAGENT_PREAMBLE = `You are a subagent of Conductor's autonomous software engineer. You implement exactly one subtask in a git working
 tree that other subagents may be editing at the same time: touch only what your subtask needs. When you need a
 decision you cannot make yourself, stop and answer with a line starting \`NEEDS_INPUT:\` followed by the question.
-Otherwise finish with a short summary of what you changed and how you verified it.`;
+Otherwise finish with a short summary of what you changed and how you verified it.
+Use codemode to batch related tool calls. Discover optional GitHub issue status tools with tool_search.`;
 
 export type ConductorExtensions = { head: Extension; subagent: Extension };
 
@@ -91,6 +93,7 @@ export function waves(tasks: readonly Subtask[]): Subtask[][] {
 export function createConductorExtensions(
 	hooks: AgentHooks,
 	github: GithubConfig | undefined = githubFromEnv(),
+	executionExtensions: readonly Extension[] = [],
 ): ConductorExtensions {
 	const runIdOf = async (api: ToolExecutionApi, context: Context): Promise<string> => {
 		const state = await api.snapshot(RunsDoc, context);
@@ -114,7 +117,7 @@ export function createConductorExtensions(
 			const choice = run.models[task.complexity ?? "high"] ?? run.models.high ?? run.models.head;
 			await configure(tx, created.id, {
 				...agentChoice(choice),
-				extensions: [CodingTools, subagent],
+				extensions: [CodingTools, ...executionExtensions, subagent],
 				cwd: run.cwd,
 				instructions: `Subtask ${task.key}: ${task.title}`,
 			});
@@ -198,6 +201,7 @@ export function createConductorExtensions(
 
 	const setStatusTool = defineTool({
 		name: "set_issue_status",
+		deferred: true,
 		description:
 			"Move the issue of this run or one of its subtasks to the project status with this name. Moving a subtask to " +
 			"the done status also closes its issue. Does nothing when it is already there.",

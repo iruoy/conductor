@@ -92,6 +92,16 @@ Git pushes use the machine's own git credentials (SSH agent or credential helper
 
 The project's fields must be single-select fields named `Status`, `Size` and `Priority`, as in GitHub's templates.
 
+The head agent and subagents can batch tool calls with Pi's durable `codemode`. Scripts execute in QuickJS worker
+threads with a shared limit of two live workers and 256 MiB per VM. Pi journals nested calls and script state for
+replay; tools keep their own replay policies, so an interrupted shell command is not promised exactly-once execution.
+Codemode's direct model helpers are disabled: model delegation goes through Conductor's configured subagent roles.
+Optional GitHub issue-status tools are discovered with `tool_search`; activated tools and codemode `store` values
+survive reopening a conversation. Existing conversations receive the extensions on runner startup.
+
+Compaction failures remain visible on their conversation until Pi reports that the failure has cleared, including
+across page reloads. A failed storage session closes and exits the runner so Phoenix can restart and reconcile it.
+
 Crashes: the runner keeps every conversation, tool call and run in `durable.sqlite` and resumes them on start. If it
 dies, the Runner process restarts it and the Coordinator reconciles: runs the runner does not know are sent again
 (`start_run` is idempotent), settled ones are handed off, open questions are kept.

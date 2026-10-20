@@ -2,9 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type FauxResponseStep, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { type FauxResponseStep, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
-import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
+import { configure, createRegistry, Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
+import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { RunsDoc } from "../src/state.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waves } from "../src/agent.ts";
@@ -129,6 +132,91 @@ describe("runner protocol", () => {
 		expect(resultText).not.toContain("\u0000");
 	});
 
+	it("discovers deferred tools and executes real nested calls through codemode", async () => {
+		const seen: string[][] = [];
+		const { runner, events } = await setup([
+			(context) => {
+				seen.push(getCurrentTools(context.messages).map((tool) => tool.name));
+				return fauxAssistantMessage([fauxToolCall("tool_search", { query: "GitHub issue status" }, { id: "discover" })], { stopReason: "toolUse" });
+			},
+			(context) => {
+				seen.push(getCurrentTools(context.messages).map((tool) => tool.name));
+				return fauxAssistantMessage([fauxToolCall("codemode", {
+					code: 'const result = await tools.bash({command: "printf codemode-output"}); text(result.output); text(result.exitCode);',
+				}, { id: "script" })], { stopReason: "toolUse" });
+			},
+			(context) => {
+				expect(JSON.stringify(context.messages)).toContain("codemode-output");
+				return fauxAssistantMessage("DONE");
+			},
+		]);
+		await start(runner, "CODE-1-1");
+		expect(await settledEvent(events, "CODE-1-1")).toMatchObject({ outcome: "completed" });
+		expect(seen[0]).toEqual(expect.arrayContaining(["codemode", "tool_search"]));
+		expect(seen[0]).not.toContain("set_issue_status");
+		expect(seen[1]).toContain("set_issue_status");
+		expect(events.some((event) => {
+			const agent = event.event as { type?: string; toolName?: string; parentToolCallId?: string } | undefined;
+			return agent?.type === "tool_execution_start" && agent.toolName === "bash" && agent.parentToolCallId === "script";
+		})).toBe(true);
+	});
+
+	it("adds codemode and discovery to conversations saved before these extensions existed", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "conductor-legacy-tools-"));
+		dirs.push(dir);
+		const file = join(dir, "runner.sqlite");
+		const registry = createRegistry();
+		registry.install(CodingTools);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const legacy = await Harness.open(await openNodeSqliteStorage(file), { models, registry }, BACKGROUND_CONTEXT);
+		await legacy.commit(async (tx) => {
+			const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+			await configure(tx, conversation.id, { model: { provider: "faux", modelId: "faux-1" }, extensions: [CodingTools] });
+			(await tx.doc(RunsDoc)).runs["LEGACY-1-1"] = {
+				conversationId: conversation.id, cwd: process.cwd(), models: { head }, submissionId: null,
+				status: "settled", aborted: false, questions: {}, children: {},
+				settled: { outcome: "completed", summary: "Earlier work", error: null },
+			};
+		}, BACKGROUND_CONTEXT);
+		await legacy.close(BACKGROUND_CONTEXT);
+		const { runner, events } = await setup([(context) => {
+			expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual(expect.arrayContaining(["codemode", "tool_search"]));
+			return fauxAssistantMessage("DONE");
+		}], await openNodeSqliteStorage(file));
+		await runner.handle({ type: "resume_run", run_id: "LEGACY-1-1", text: "Continue" });
+		expect(await settledEvent(events, "LEGACY-1-1")).toMatchObject({ outcome: "completed" });
+	});
+
+	it("retains codemode store and activated tools after reopening a durable conversation", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "conductor-codemode-"));
+		dirs.push(dir);
+		const file = join(dir, "runner.sqlite");
+		const first = await setup([
+			fauxAssistantMessage([fauxToolCall("tool_search", { query: "GitHub issue status" }, { id: "discover" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage([fauxToolCall("codemode", { code: 'store("answer", 42); text("saved");' }, { id: "save" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("DONE"),
+		], await openNodeSqliteStorage(file));
+		await start(first.runner, "CODE-2-1");
+		await settledEvent(first.events, "CODE-2-1");
+		await first.runner.close();
+		open.splice(open.indexOf(first.runner), 1);
+
+		const second = await setup([
+			(context) => {
+				expect(getCurrentTools(context.messages).map((tool) => tool.name)).toContain("set_issue_status");
+				return fauxAssistantMessage([fauxToolCall("codemode", { code: 'text(load("answer"));' }, { id: "load" })], { stopReason: "toolUse" });
+			},
+			(context) => {
+				expect(JSON.stringify(context.messages)).toContain("42");
+				return fauxAssistantMessage("DONE");
+			},
+		], await openNodeSqliteStorage(file));
+		await second.runner.handle({ type: "resume_run", run_id: "CODE-2-1", text: "Continue" });
+		expect(await settledEvent(second.events, "CODE-2-1")).toMatchObject({ outcome: "completed" });
+	});
+
 	it("treats a duplicate start_run as a no-op", async () => {
 		const { runner, events, faux } = await setup([fauxAssistantMessage("DONE")]);
 		const first = (await start(runner, "PROJ-2-1")) as { conversation_id: number };
@@ -222,6 +310,9 @@ describe("runner protocol", () => {
 			const { runner, events } = await setup(
 				[
 					fauxAssistantMessage([fauxToolCall("run_subagents", { tasks }, { id: "c1" })], { stopReason: "toolUse" }),
+					fauxAssistantMessage([fauxToolCall("tool_search", { query: "GitHub issue status" }, { id: "search-status" })], {
+						stopReason: "toolUse",
+					}),
 					fauxAssistantMessage([fauxToolCall("set_issue_status", { number: 2, status: "in progress" }, { id: "c2" })], {
 						stopReason: "toolUse",
 					}),

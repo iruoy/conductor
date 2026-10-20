@@ -751,8 +751,21 @@ defmodule ConductorWeb.RunLive do
       )
 
   # A snapshot follows a runner restart; the database already holds it, so reload from there.
-  defp apply_event(socket, conversation, %{"type" => "snapshot"}),
-    do: select(socket, conversation)
+  defp apply_event(socket, conversation, %{"type" => "snapshot"} = event) do
+    nested =
+      for tool <- event["nestedTools"] || [],
+          tool["status"] == "running",
+          into: %{},
+          do:
+            {tool["callId"],
+             %{
+               name: tool["name"],
+               args: tool["arguments"] || %{},
+               output: tail(tool["output"] || "")
+             }}
+
+    socket |> select(conversation) |> assign(live_tools: nested)
+  end
 
   defp apply_event(socket, _conversation, %{
          "type" => "message_start",

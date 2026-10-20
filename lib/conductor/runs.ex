@@ -409,6 +409,13 @@ defmodule Conductor.Runs do
     upsert_events([entry_row(run_id, conversation, role, entry)])
   end
 
+  # Nested calls belong to their parent's result; they do not produce standalone transcript entries.
+  defp persist(_run_id, _conversation, _role, %{
+         "type" => "tool_execution_start",
+         "parentToolCallId" => parent
+       })
+       when is_binary(parent), do: :ok
+
   defp persist(run_id, conversation, role, %{"type" => "tool_execution_start"} = event) do
     payload = Map.take(event, ["toolCallId", "toolName", "args"])
 

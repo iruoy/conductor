@@ -4,6 +4,23 @@ defmodule Conductor.RunsTest do
   require Ash.Query
   alias Conductor.Runs
 
+  test "nested codemode tool starts are live-only and do not leave unfinished transcript calls" do
+    run = run_fixture(project_fixture(), "CODE-1")
+    Runs.subscribe(run.id)
+
+    event = %{
+      "type" => "tool_execution_start",
+      "toolCallId" => "code/c1",
+      "parentToolCallId" => "code",
+      "toolName" => "bash",
+      "args" => %{"command" => "pwd"}
+    }
+
+    ingest(run, event)
+    assert_receive {:agent_event, %{event: ^event}}
+    assert Runs.list_events(run.id) == []
+  end
+
   test "compaction failures survive reloads without changing transcript or conversation state" do
     run = run_fixture(project_fixture(), "COMPACT-1", %{status: :running})
     ingest(run, %{"type" => "message_end", "entry" => %{"id" => 1, "kind" => "pi.user"}})

@@ -15,6 +15,50 @@ defmodule ConductorWeb.RunLiveTest do
     %{project: project}
   end
 
+  test "a restarted codemode script restores nested tool output from its snapshot", %{
+    conn: conn,
+    project: project
+  } do
+    run = run_fixture(project, "code-1", %{status: :running})
+    {:ok, view, _} = live(conn, ~p"/runs/#{run.id}")
+
+    Runs.ingest(%{
+      "type" => "agent_event",
+      "run_id" => run.id,
+      "conversation" => 1,
+      "role" => "head",
+      "event" => %{
+        "type" => "snapshot",
+        "entries" => [],
+        "nestedTools" => [
+          %{
+            "callId" => "code-c1",
+            "name" => "bash",
+            "arguments" => %{"command" => "pwd"},
+            "status" => "running",
+            "output" => "Restored output"
+          }
+        ]
+      }
+    })
+
+    assert has_element?(view, "#live-tool-code-c1", "Restored output")
+
+    Runs.ingest(%{
+      "type" => "agent_event",
+      "run_id" => run.id,
+      "conversation" => 1,
+      "role" => "head",
+      "event" => %{
+        "type" => "tool_execution_end",
+        "toolCallId" => "code-c1",
+        "parentToolCallId" => "code"
+      }
+    })
+
+    refute has_element?(view, "#live-tool-code-c1")
+  end
+
   test "compaction warnings survive reload and clear when the runner reports recovery", %{
     conn: conn,
     project: project

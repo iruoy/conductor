@@ -26,6 +26,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { agentChoice, answerText, createConductorExtensions, type GithubConfig, githubFromEnv } from "./agent.ts";
+import { createExecutionTools } from "./execution-tools.ts";
 import { probeDefaultLevel } from "./defaults.ts";
 import { classifyIssue, parseIssue } from "./classifier.ts";
 import { contextPage, environmentSecrets } from "./context-inspection.ts";
@@ -52,6 +53,7 @@ const ctx = BACKGROUND_CONTEXT;
 export class Runner {
 	private harness!: Harness;
 	private conductor!: Extension;
+	private readonly execution = createExecutionTools();
 	private readonly emitEvent: (event: Event) => void;
 	private readonly models: Models;
 	private readonly inspectionSecrets: readonly string[];
@@ -82,9 +84,11 @@ export class Runner {
 					),
 			},
 			options.github ?? githubFromEnv(),
+			runner.execution.extensions,
 		);
 		const registry = createRegistry();
 		registry.install(CodingTools);
+		for (const extension of runner.execution.extensions) registry.install(extension);
 		registry.install(conductor);
 		registry.install(subagent);
 		runner.harness = await Harness.open(
@@ -92,7 +96,7 @@ export class Runner {
 			{
 				models: options.models,
 				registry,
-				settings: { extensions: [CodingTools], retry: { maxRetries: 5 } },
+				settings: { extensions: [CodingTools, ...runner.execution.extensions], retry: { maxRetries: 5 } },
 				env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? process.cwd() }),
 				onReport: (error) => runner.emit({ type: "log", level: "error", message: String(error) }),
 			},
@@ -101,12 +105,27 @@ export class Runner {
 		void runner.harness.closed.then((end) => {
 			if (end.reason === "failed") {
 				runner.closed = true;
+				void runner.execution.sandbox.close();
 				runner.emit({ type: "log", level: "error", message: "Runner storage failed; restarting from durable state." });
 			}
 		});
 		runner.conductor = conductor;
-		runner.harness.resume();
 		const state = await runner.state();
+		// Existing conversations select extensions explicitly. Add the new tools before resumed work runs,
+		// preserving their model choices and any tools previously activated through tool_search.
+		for (const run of Object.values(state.runs)) {
+			await runner.harness.commit(async (tx) => {
+				await configure(tx, run.conversationId as ConversationId, {
+					extensions: [CodingTools, ...runner.execution.extensions, conductor],
+				});
+				for (const child of Object.values(run.children)) {
+					await configure(tx, child.conversationId as ConversationId, {
+						extensions: [CodingTools, ...runner.execution.extensions, subagent],
+					});
+				}
+			}, ctx);
+		}
+		runner.harness.resume();
 		runner.resumed = Object.keys(state.runs).filter((id) => state.runs[id]!.status === "running");
 		for (const runId of runner.resumed) runner.track(runId);
 		runner.emit({ type: "ready", version: VERSION, resumed: runner.resumed });
@@ -163,6 +182,7 @@ export class Runner {
 	async close(): Promise<void> {
 		this.closed = true;
 		for (const streams of this.streams.values()) for (const stream of streams.values()) await stream.stop();
+		await this.execution.sandbox.close();
 		await this.harness.close(ctx);
 	}
 
@@ -206,7 +226,7 @@ export class Runner {
 				const existing = doc.runs[runId];
 				if (existing !== undefined) return existing.conversationId;
 				const created = await tx.createConversation({ ownership: { kind: "ownerless" } });
-				await configure(tx, created.id, { ...agentChoice(models.head), extensions: [CodingTools, this.conductor], cwd });
+				await configure(tx, created.id, { ...agentChoice(models.head), extensions: [CodingTools, ...this.execution.extensions, this.conductor], cwd });
 				doc.runs[runId] = {
 					conversationId: created.id as number,
 					cwd,
