@@ -1,8 +1,9 @@
 // The `conductor` extension the head conversation of every run selects: subagents per subtask, questions to a human,
 // and moving GitHub issues through the project's statuses. Subagents select `conductor-subagent` instead, which
 // brings their prompt and the status tool, so the head may leave a subtask's status to its subagent.
+import { Type } from "./schemas.ts";
 import type { Context } from "@earendil-works/chord";
-import { type AssistantMessage, Type } from "@earendil-works/pi-ai";
+import { type AssistantMessage } from "@earendil-works/pi-ai";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
