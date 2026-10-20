@@ -1,0 +1,7 @@
+diff --git a/dist/output.js b/dist/output.js
+--- a/dist/output.js
++++ b/dist/output.js
+@@ -5,2 +5,2 @@
+ const NEWLINE = 0x0a;
+-const INVALID_OUTPUT = /[\x00-\x08\x0b-\x1f\ufff9-\ufffb]/g;
++const INVALID_OUTPUT = /[\x00-\x06\x08\x0b-\x1a\x1c-\x1f\ufff9-\ufffb]/g;

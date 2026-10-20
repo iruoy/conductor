@@ -169,7 +169,7 @@ export function createConductorExtensions(
 				.map((t) => results.get(t.key)!)
 				.map((r) => `## ${r.key}: ${r.status}\n\n${r.text}`)
 				.join("\n\n");
-			return { content: [{ type: "text", text }] };
+			return { output: [{ type: "text", text }] };
 		},
 	});
 
@@ -189,7 +189,7 @@ export function createConductorExtensions(
 			}, context);
 			hooks.question(runId, qid, args.question);
 			return {
-				content: [{ type: "text", text: "The question was sent. Stop now; the answer will arrive as your next message." }],
+				output: [{ type: "text", text: "The question was sent. Stop now; the answer will arrive as your next message." }],
 				control: { terminate: true },
 			};
 		},
@@ -210,7 +210,7 @@ export function createConductorExtensions(
 			const runId = await runIdOf(api, context);
 			const run = (await api.snapshot(RunsDoc, context))?.runs[runId]?.github;
 			if (run === undefined) throw new Error("This run has no GitHub project");
-			return { content: [{ type: "text", text: await setIssueStatus(github, run, args.number, args.status) }] };
+			return { output: [{ type: "text", text: await setIssueStatus(github, run, args.number, args.status) }] };
 		},
 	});
 
