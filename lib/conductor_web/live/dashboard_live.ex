@@ -91,13 +91,7 @@ defmodule ConductorWeb.DashboardLive do
               phx-click="filter"
               phx-value-status={group}
               aria-pressed={to_string(@group == group)}
-              class={[
-                "inline-flex h-6 cursor-pointer items-center gap-[5px] rounded-full border px-2 text-xs transition-colors",
-                if(@group == group,
-                  do: "border-base-content bg-base-content text-base-100",
-                  else: "border-line-strong bg-base-100 hover:bg-row-hover"
-                )
-              ]}
+              class="btn btn-ghost btn-xs h-6 gap-[5px] rounded-full border-line-strong px-2 font-normal"
             >
               <span :if={dot} class={["size-1.5 rounded-full", dot]}></span>
               {label}
@@ -250,7 +244,7 @@ defmodule ConductorWeb.DashboardLive do
                         aria-label={"Live log for #{run.id}"}
                         aria-pressed={to_string(@selected == run.id)}
                         title="Live log"
-                        class="btn btn-ghost size-6 min-h-0 p-0 text-fg-secondary aria-pressed:bg-muted aria-pressed:text-base-content"
+                        class="btn btn-ghost size-6 min-h-0 p-0"
                       >
                         <.icon name="hero-command-line-micro" class="size-3.5" />
                       </button>

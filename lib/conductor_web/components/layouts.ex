@@ -57,7 +57,7 @@ defmodule ConductorWeb.Layouts do
           id="nav-runs"
           navigate={~p"/"}
           aria-current={@current_page == :runs && "page"}
-          class="whitespace-nowrap rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
+          class="btn btn-ghost btn-xs h-7 whitespace-nowrap px-2 font-normal"
         >
           Runs
           <span
@@ -75,7 +75,7 @@ defmodule ConductorWeb.Layouts do
           id="nav-config"
           navigate={~p"/config"}
           aria-current={@current_page == :config && "page"}
-          class="whitespace-nowrap rounded px-2 py-1 text-fg-secondary hover:bg-row-hover aria-[current=page]:bg-muted aria-[current=page]:text-base-content"
+          class="btn btn-ghost btn-xs h-7 whitespace-nowrap px-2 font-normal"
         >
           Config
         </.link>
@@ -172,7 +172,7 @@ defmodule ConductorWeb.Layouts do
         type="button"
         aria-label={label}
         aria-pressed="false"
-        class="flex size-6 cursor-pointer items-center justify-center rounded text-fg-tertiary transition-colors hover:bg-row-hover aria-pressed:bg-muted aria-pressed:text-base-content"
+        class="btn btn-ghost btn-xs size-6 min-h-0 p-0"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme={theme}
       >

@@ -14,6 +14,21 @@ defmodule ConductorWeb.DashboardLiveTest do
     %{project: project}
   end
 
+  test "navigation and filters expose their active state through ARIA", %{conn: conn} do
+    {:ok, view, _} = live(conn, ~p"/")
+    assert has_element?(view, ~s|#nav-runs.btn[aria-current="page"]|)
+    refute has_element?(view, "#nav-config[aria-current]")
+    assert has_element?(view, ~s|#filter-all.btn[aria-pressed="true"]|)
+
+    view |> element("#filter-running") |> render_click()
+    assert has_element?(view, ~s|#filter-running.btn[aria-pressed="true"]|)
+    assert has_element?(view, ~s|#filter-all[aria-pressed="false"]|)
+
+    {:ok, config, _} = live(conn, ~p"/config")
+    assert has_element?(config, ~s|#nav-config.btn[aria-current="page"]|)
+    refute has_element?(config, "#nav-runs[aria-current]")
+  end
+
   test "the live log opens beside the table and closes from the panel and from the row", %{
     conn: conn,
     project: project
