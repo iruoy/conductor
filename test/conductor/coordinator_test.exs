@@ -30,6 +30,8 @@ defmodule Conductor.CoordinatorTest do
     assert [%{id: "shop-4-1"}] = Runs.list_by_status([:picked_up])
     assert {:error, :already_open} = Coordinator.enqueue(project, "shop-1", snapshot("shop-1"))
 
+    await_runner_run("shop-1-1")
+
     assert {:ok, _} =
              Runner.call(%{type: "fake_settle", run_id: "shop-1-1", outcome: "completed"})
 
@@ -63,6 +65,7 @@ defmodule Conductor.CoordinatorTest do
     start_workers(dir)
     {:ok, _} = Coordinator.enqueue(project, "shop-7", snapshot("shop-7", "Work [fake:hang]"))
     assert_receive {:run_updated, %{id: "shop-7-1", status: :running}}, 10_000
+    await_runner_run("shop-7-1")
     assert {:ok, _} = Runner.call(%{type: "fake_settle", run_id: "shop-7-1", outcome: "failed"})
     assert_receive {:run_updated, %{id: "shop-7-1", status: :failed}}, 10_000
 

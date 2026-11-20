@@ -280,6 +280,17 @@ defmodule Conductor.Fixtures do
     start_supervised!(Conductor.Application.workers_spec())
   end
 
+  @doc """
+  Waits until the runner has the run. A run is `:running` before its provisioning job sends `start_run`, so a
+  command for the run right after that update can reach the runner first.
+  """
+  def await_runner_run(run_id) do
+    eventually(fn ->
+      assert {:ok, %{"runs" => runs}} = Conductor.Runner.call(%{type: "sync"})
+      assert Enum.any?(runs, &(&1["run_id"] == run_id))
+    end)
+  end
+
   @doc "Retries `fun` until it stops raising, for state that settles in another OS process."
   def eventually(fun, timeout \\ 5_000) do
     fun.()
