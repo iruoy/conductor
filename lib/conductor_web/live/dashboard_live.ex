@@ -21,7 +21,13 @@ defmodule ConductorWeb.DashboardLive do
     # The runs themselves are read by handle_params/3, which knows the filter.
     {:ok,
      socket
-     |> assign(page_title: "Runs", selected: nil, log_seq: 0, now: DateTime.utc_now())
+     |> assign(
+       page_title: "Runs",
+       selected: nil,
+       log_seq: 0,
+       retries: %{},
+       now: DateTime.utc_now()
+     )
      |> assign(interval: interval, last_poll: last_poll)
      |> assign(group: :all, text: "", run_ids: MapSet.new())
      |> assign(counts: %{}, shown_count: 0, total_count: 0)
@@ -54,6 +60,7 @@ defmodule ConductorWeb.DashboardLive do
         >
           <span
             id="github-checked-dot"
+            aria-hidden="true"
             class={[
               "size-1.5 rounded-full",
               cond do
@@ -537,35 +544,49 @@ defmodule ConductorWeb.DashboardLive do
     {:noreply, assign(socket, :last_poll, last_poll)}
   end
 
-  def handle_info({:agent_event, %{role: role, event: event}}, socket) do
-    {:noreply, log_event(socket, role, event)}
+  def handle_info({:agent_event, %{conversation: conversation, role: role, event: event}}, socket) do
+    {:noreply, socket |> log_entries(role, event) |> log_retry(conversation, role, event)}
   end
 
   def handle_info({:question, question}, socket) do
     {:noreply, log(socket, "human?", question.text, "text-warning")}
   end
 
-  defp log_event(socket, role, %{
-         "type" => "message_end",
-         "entry" => %{"kind" => "pi.assistant"} = entry
-       }) do
-    text = message_text(entry) |> String.trim()
-    if text == "", do: socket, else: log(socket, role, truncate(text, 400), "")
+  # What the agent said and which tools it called, from its answers as they come.
+  defp log_entries(socket, role, %{"type" => "update", "entries" => entries}) do
+    for %{"kind" => "pi.assistant"} = entry <- entries, reduce: socket do
+      socket ->
+        text = message_text(entry) |> String.trim()
+        socket = if text == "", do: socket, else: log(socket, role, truncate(text, 400), "")
+
+        for %{"name" => name} = call <- message_calls(entry), reduce: socket do
+          socket ->
+            args = call["arguments"] || %{}
+
+            log(
+              socket,
+              role,
+              "#{name} #{truncate(tool_call(name, args), 200)}",
+              "text-base-content/70"
+            )
+        end
+    end
   end
 
-  defp log_event(socket, role, %{
-         "type" => "tool_execution_start",
-         "toolName" => name,
-         "args" => args
-       }) do
-    log(socket, role, "#{name} #{truncate(tool_call(name, args), 200)}", "text-base-content/70")
+  defp log_entries(socket, _role, _event), do: socket
+
+  # A retry is logged once, when the live state first shows it.
+  defp log_retry(socket, conversation, role, %{"live" => %{"retry" => %{"at" => at} = retry}}) do
+    if socket.assigns.retries[conversation] == at do
+      socket
+    else
+      socket
+      |> assign(retries: Map.put(socket.assigns.retries, conversation, at))
+      |> log(role, "retrying: #{retry["error"]}", "text-warning")
+    end
   end
 
-  defp log_event(socket, role, %{"type" => "auto_retry_start", "errorMessage" => message}) do
-    log(socket, role, "retrying: #{message}", "text-warning")
-  end
-
-  defp log_event(socket, _role, _event), do: socket
+  defp log_retry(socket, _conversation, _role, _event), do: socket
 
   defp log(socket, role, text, class) do
     seq = socket.assigns.log_seq + 1
@@ -644,6 +665,10 @@ defmodule ConductorWeb.DashboardLive do
   end
 
   defp checked_text(nil, _interval), do: "GitHub not checked yet"
+
+  # A failed check says so in words, not only by the colour of its dot; its reason is the title.
+  defp checked_text(%{ok?: false, at: at}, interval),
+    do: ["GitHub check failed ", local_time(at), interval_text(interval)]
 
   defp checked_text(%{at: at}, interval),
     do: ["GitHub checked ", local_time(at), interval_text(interval)]

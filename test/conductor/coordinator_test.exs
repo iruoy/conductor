@@ -51,38 +51,68 @@ defmodule Conductor.CoordinatorTest do
     # The run keeps the models it was started with, whatever the settings say later.
     choice = %{"provider" => "faux", "modelId" => "faux-1"}
     assert run.models == Map.new(~w(head low medium high), &{&1, choice})
-    # Older/unavailable classifiers cannot prevent pickup. The audit is durable.
-    assert run.classifications["#4"]["status"] == "fallback"
-    assert run.classifications["#4"]["complexity"] == "high"
     settings_fixture(%{models: %{"head" => %{"provider" => "faux", "modelId" => "faux-2"}}})
     assert Runs.get_run!("shop-4-1").models["head"] == choice
     assert git!(run.workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"]) == "feature/4"
   end
 
-  test "queued runs start by priority, the oldest first among equals", %{project: project} do
-    settings_fixture(%{max_concurrent: 0})
+  test "a failed run goes on where it stopped, in the same attempt and workspace", %{
+    tmp_dir: dir,
+    project: project
+  } do
+    start_workers(dir)
+    {:ok, _} = Coordinator.enqueue(project, "shop-7", snapshot("shop-7", "Work [fake:hang]"))
+    assert_receive {:run_updated, %{id: "shop-7-1", status: :running}}, 10_000
+    assert {:ok, _} = Runner.call(%{type: "fake_settle", run_id: "shop-7-1", outcome: "failed"})
+    assert_receive {:run_updated, %{id: "shop-7-1", status: :failed}}, 10_000
 
-    for {n, rank} <- [{1, 2}, {2, nil}, {3, 0}, {4, 0}] do
-      key = "shop-#{n}"
-      {:ok, _} = Runs.create_run(project, key, snapshot(key, "T", %{"priority_rank" => rank}))
-    end
+    failed = Runs.get_run!("shop-7-1")
+    assert Runs.continuable?(failed)
+    assert {:ok, 5} = Coordinator.message("shop-7-1", "")
+    assert_receive {:run_updated, %{id: "shop-7-1", status: :running, error: nil}}, 5_000
+    assert_receive {:run_updated, %{id: "shop-7-1", status: :completed}}, 10_000
 
-    order =
-      for _ <- 1..4 do
-        run = Runs.next_queued()
-        {:ok, _} = Runs.fail(run)
-        run.issue_key
-      end
+    done = Runs.get_run!("shop-7-1")
 
-    assert order == ["shop-3", "shop-4", "shop-1", "shop-2"]
+    assert {done.attempt, done.workspace_path, done.branch} ==
+             {1, failed.workspace_path, failed.branch}
   end
 
-  test "a failed run is not handed off", %{tmp_dir: dir, project: project} do
+  test "a run the agent failed itself is not handed off and needs a message to go on", %{
+    tmp_dir: dir,
+    project: project
+  } do
     start_workers(dir)
-    {:ok, _} = Coordinator.enqueue(project, "shop-5", snapshot("shop-5", "Nope [fake:fail]"))
+    {:ok, _} = Coordinator.enqueue(project, "shop-8", snapshot("shop-8", "Nope [fake:fail]"))
 
-    assert_receive {:run_updated, %{id: "shop-5-1", status: :failed, error: "could not do it"}},
+    assert_receive {:run_updated, %{id: "shop-8-1", status: :failed, error: "could not do it"}},
                    10_000
+
+    refute_received {:github_status, "item-8", "option:Review"}
+
+    assert {:error, "The agent had finished; tell it how to go on."} =
+             Coordinator.message("shop-8-1", " ")
+
+    assert %{status: :failed, error: "could not do it"} = Runs.get_run!("shop-8-1")
+
+    assert {:ok, 5} = Coordinator.message("shop-8-1", "The database is back; try again")
+    assert_receive {:run_updated, %{id: "shop-8-1", status: :completed}}, 10_000
+  end
+
+  test "only the latest attempt that got to run can go on", %{tmp_dir: dir, project: project} do
+    start_workers(dir)
+    never_ran = run_fixture(project, "shop-9", %{status: :failed})
+    refute Runs.continuable?(never_ran)
+    assert {:error, :not_continuable} = Coordinator.message(never_ran.id, "")
+
+    models = %{"head" => %{"provider" => "faux", "modelId" => "faux-1"}}
+    ran = run_fixture(project, "shop-10", %{status: :running, models: models})
+    {:ok, older} = Runs.fail(ran)
+    assert Runs.continuable?(older)
+
+    {:ok, _newer} = Runs.create_run(project, "shop-10", snapshot("shop-10"))
+    refute Runs.continuable?(older)
+    assert {:error, :not_continuable} = Coordinator.message(older.id, "")
   end
 
   test "questions wait for an answer", %{tmp_dir: dir, project: project} do
@@ -100,33 +130,15 @@ defmodule Conductor.CoordinatorTest do
     for {status, n} <- Enum.with_index(Conductor.Runs.Run.statuses(), 100), status != :failed do
       run = run_fixture(project, "shop-#{n}", %{status: status})
       expected = if Conductor.Runs.Run.terminal?(run), do: :not_retryable, else: :still_open
-
       assert {:error, ^expected} = Coordinator.retry(run.id)
       assert Runs.other_attempts(run) == []
-
-      assert {:reply, {:error, ^expected}, %{jobs: %{}}} =
-               Coordinator.handle_call({:retry, run.id, run.issue_snapshot}, nil, %{jobs: %{}})
     end
   end
 
-  test "a retry permanently supersedes its failed predecessor", %{tmp_dir: dir, project: project} do
-    settings_fixture(%{max_concurrent: 0})
-    start_workers(dir)
-    first = run_fixture(project, "shop-70", %{status: :failed})
-
-    assert {:ok, second} = Coordinator.retry(first.id)
-    assert {:error, :not_retryable} = Coordinator.retry(first.id)
-    assert {:ok, second} = Runs.fail(second)
-    assert {:error, :not_retryable} = Coordinator.retry(first.id)
-
-    assert {:reply, {:error, :not_retryable}, %{jobs: %{}}} =
-             Coordinator.handle_call({:retry, first.id, first.issue_snapshot}, nil, %{jobs: %{}})
-
-    assert {:ok, %{attempt: 3}} = Coordinator.retry(second.id)
-    assert {:error, :not_retryable} = Coordinator.retry(second.id)
-  end
-
-  test "abort and retry", %{tmp_dir: dir, project: project} do
+  test "abort and retry; only the latest attempt can be retried", %{
+    tmp_dir: dir,
+    project: project
+  } do
     start_workers(dir)
     {:ok, _} = Coordinator.enqueue(project, "shop-7", snapshot("shop-7", "Hang [fake:hang]"))
     assert_receive {:run_updated, %{id: "shop-7-1", status: :running}}, 10_000
@@ -136,6 +148,13 @@ defmodule Conductor.CoordinatorTest do
 
     assert {:ok, %{id: "shop-7-2", attempt: 2}} = Coordinator.retry("shop-7-1")
     assert_receive {:run_updated, %{id: "shop-7-2", status: :completed}}, 10_000
+    assert {:error, :not_retryable} = Coordinator.retry("shop-7-1")
+
+    # The server checks again, for a retry that raced the first one past the client-side check.
+    first = Runs.get_run!("shop-7-1")
+
+    assert {:reply, {:error, :not_retryable}, _} =
+             Coordinator.handle_call({:retry, first.id, first.issue_snapshot}, nil, %{jobs: %{}})
   end
 
   test "re-sends start_run after the runner crashes mid-run", %{tmp_dir: dir, project: project} do

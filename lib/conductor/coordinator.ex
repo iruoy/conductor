@@ -12,7 +12,7 @@ defmodule Conductor.Coordinator do
   alias Conductor.{Config, GitHub, Prompt, Runner, Runs, Workspace}
   alias Conductor.Runs.Run
 
-  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
   @doc "Queues a new run for an issue, unless one is already open."
   def enqueue(project, issue_key, snapshot),
@@ -63,7 +63,7 @@ defmodule Conductor.Coordinator do
   ## Server
 
   @impl true
-  def init(_opts), do: {:ok, %{jobs: %{}}, {:continue, :reconcile}}
+  def init(nil), do: {:ok, %{jobs: %{}}, {:continue, :reconcile}}
 
   @impl true
   def handle_continue(:reconcile, state) do
@@ -119,6 +119,8 @@ defmodule Conductor.Coordinator do
 
     result =
       cond do
+        # A failed run goes on without a message too: the agent picks up where it stopped.
+        run.status == :failed -> continue_failed(run, String.trim(text))
         String.trim(text) == "" -> {:error, :empty_message}
         run.status == :completed -> resume_review(run, text)
         run.status == :running -> send_message(run.id, text)
@@ -268,8 +270,7 @@ defmodule Conductor.Coordinator do
 
   ## Jobs
 
-  @doc false
-  def provision(run_id) do
+  defp provision(run_id) do
     run = Runs.get_run!(run_id)
     project = run.project
     repo = project.repo
@@ -311,8 +312,7 @@ defmodule Conductor.Coordinator do
     end
   end
 
-  @doc false
-  def hand_off(run_id) do
+  defp hand_off(run_id) do
     run = Runs.get_run!(run_id)
     repo = run.project.repo
 
@@ -403,6 +403,38 @@ defmodule Conductor.Coordinator do
           GitHub.transition(run.project, GitHub.number(run.issue_key), run.project.handoff_status)
           error
       end
+    end
+  end
+
+  # The failed conversation goes on in its workspace: with the message as new input, or without one from where it
+  # stopped (Pi's `continue`). The runner refuses an empty one when the agent had finished rather than failed.
+  defp continue_failed(run, text) do
+    with :ok <- continuable(run),
+         {:ok, running} <- Runs.continue(run) do
+      case Runner.call(%{type: "resume_run", run_id: run.id, text: text}) do
+        {:ok, %{"submission_id" => id}} ->
+          {:ok, id}
+
+        {:error, _} = error ->
+          Runs.fail(running, %{error: run.error})
+          error
+      end
+    end
+  end
+
+  defp continuable(run) do
+    cond do
+      not Runs.continuable?(run) ->
+        {:error, :not_continuable}
+
+      Runs.active_count() >= Config.get_settings().max_concurrent ->
+        {:error, :concurrency_limit}
+
+      not is_binary(run.workspace_path) or not File.dir?(run.workspace_path) ->
+        {:error, :workspace_unavailable}
+
+      true ->
+        :ok
     end
   end
 

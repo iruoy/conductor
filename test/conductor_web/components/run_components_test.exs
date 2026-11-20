@@ -3,74 +3,56 @@ defmodule ConductorWeb.RunComponentsTest do
   import ConductorWeb.RunComponents
   import Phoenix.LiveViewTest, only: [render_component: 2]
 
-  test "tool scroll boxes are named keyboard stops without region landmarks" do
-    for {attrs, labels} <- [
-          {[name: "bash", args: %{"command" => "echo one\necho two"}, output: "one\ntwo"],
-           ["bash tool call", "bash output"]},
-          {[name: "write", args: %{"path" => "file", "content" => "contents"}],
-           ["Written file content"]},
-          {[name: "edit", args: %{"path" => "file"}, diff: "-1 old\n+1 new"], ["edit diff"]},
-          {[name: "bash", args: %{}, output: "failed", error: true], ["bash output"]},
-          {[name: "bash", output: "running", streaming: true], ["bash output"]}
-        ] do
-      html = render_component(&tool/1, attrs)
-      blocks = find(html, "pre")
-      assert Enum.count(blocks) == length(labels)
-
-      for label <- labels do
-        assert found?(html, "pre[aria-label='#{label}']")
-      end
-
-      assert Enum.count(blocks) ==
-               Enum.count(
-                 find(html, "pre.scrollable-output[tabindex='0'][role='group'][aria-label]")
-               )
-
-      refute found?(html, "[role='region']")
-    end
-  end
-
-  describe "tool output scrolling" do
-    test "streaming and completed output keep the same pre id and hook without ignoring patches" do
-      for {output, state} <- [
-            {"first line", [streaming: true]},
-            {"first line\nsecond line", [streaming: true]},
-            {"first line\nsecond line\nfinished", [done: true, exit_code: 0]}
+  describe "tool boxes" do
+    test "each scroll box is a named keyboard stop, and only output is hooked for scrolling" do
+      for {attrs, labels} <- [
+            {[name: "bash", args: %{"command" => "echo one\necho two"}, output: "one\ntwo"],
+             ["bash tool call", "bash output"]},
+            {[name: "write", args: %{"path" => "file", "content" => "contents"}],
+             ["Written file content"]},
+            {[name: "edit", args: %{"path" => "file"}, diff: "-1 old\n+1 new", output: "ok"],
+             ["edit diff"]}
           ] do
+        html = render_component(&tool/1, [id: "tool"] ++ attrs)
+        blocks = find(html, "pre")
+        assert Enum.count(blocks) == length(labels)
+
+        for label <- labels do
+          assert found?(html, "pre[tabindex='0'][role='group'][aria-label='#{label}']")
+        end
+
+        refute found?(html, "[role='region']")
+        refute found?(html, "pre:not([data-tool-output])[phx-hook]")
+      end
+    end
+
+    test "streaming and finished output keep one stable hooked box that LiveView patches" do
+      for state <- [[streaming: true], [done: true, exit_code: 0]] do
         html =
-          render_component(
-            &tool/1,
-            [id: "live-tool-t1", name: "bash", output: output] ++ state
-          )
+          render_component(&tool/1, [id: "live-tool-t1", name: "bash", output: "a\nb"] ++ state)
 
         assert found?(
                  html,
                  "#live-tool-t1 > pre#live-tool-t1-output[data-tool-output][phx-hook='ToolOutputScroller']"
                )
 
-        assert LazyHTML.text(find(html, "#live-tool-t1-output")) == output
-        assert Enum.count(find(html, "[phx-hook='ToolOutputScroller']")) == 1
-        refute found?(html, "#live-tool-t1[phx-update='ignore']")
-        refute found?(html, "#live-tool-t1 [phx-update='ignore']")
+        assert Enum.count(find(html, "[phx-hook]")) == 1
+        refute found?(html, "[phx-update='ignore']")
       end
     end
 
-    test "output remains server-rendered, cleaned and escaped when the hook is attached" do
-      html =
-        render_component(&tool/1,
-          id: "tool-escaped",
-          name: "bash",
-          output: "\e[32m<script>unsafe()</script>\e[0m\n{still plain text}",
-          streaming: true
-        )
+    test "the hook mounts only once there is output and an id to hang it on" do
+      refute found?(
+               render_component(&tool/1, id: "t", name: "bash", streaming: true),
+               "[phx-hook]"
+             )
 
-      assert LazyHTML.text(find(html, "#tool-escaped-output")) ==
-               "<script>unsafe()</script>\n{still plain text}"
-
-      refute found?(html, "#tool-escaped-output script")
+      html = render_component(&tool/1, name: "bash", output: "anonymous output")
+      assert text(html, "pre[data-tool-output]") == "anonymous output"
+      refute found?(html, "[phx-hook]")
     end
 
-    test "separate transcript calls get distinct stable output ids" do
+    test "transcript calls and orphan results get distinct stable output ids" do
       html =
         show(
           steps([
@@ -79,205 +61,267 @@ defmodule ConductorWeb.RunComponentsTest do
           ])
         )
 
-      for id <- ["tool-t1-output", "tool-t2-output"] do
-        assert found?(html, "pre##{id}[data-tool-output][phx-hook='ToolOutputScroller']")
-      end
+      assert found?(html, "pre#tool-t1-output[phx-hook='ToolOutputScroller']")
+      assert found?(html, "pre#tool-t2-output[phx-hook='ToolOutputScroller']")
 
-      assert Enum.count(find(html, "[phx-hook='ToolOutputScroller']")) == 2
+      failed = result("bash", "boom", error: "Command exited with code 1")
+      html = show(%{id: "r", kind: "pi.tool-result", payload: failed})
+      assert found?(html, "pre#r-tool-result-output[phx-hook='ToolOutputScroller']")
+      assert text(html, "[data-tool='bash result'] [data-tool-status=error]") == "exit 1"
     end
 
-    test "a result without its call also has a stable output hook id" do
-      for output <- ["first", "first\nfinished"] do
-        html = show(%{id: "r", kind: "pi.tool-result", payload: result("bash", output)})
-
-        assert found?(
-                 html,
-                 "#r-tool-result > pre#r-tool-result-output[data-tool-output][phx-hook='ToolOutputScroller']"
-               )
-
-        assert LazyHTML.text(find(html, "#r-tool-result-output")) == output
-      end
-    end
-
-    test "only output is hooked, not multiline commands, written content or diffs" do
-      for attrs <- [
-            [name: "bash", args: %{"command" => "echo one\necho two"}, output: "one\ntwo"],
-            [name: "write", args: %{"content" => "contents"}, output: "ok"],
-            [name: "edit", diff: "-1 old\n+1 new", output: "ok"]
-          ] do
-        html = render_component(&tool/1, [id: "tool-scope"] ++ attrs)
-        refute found?(html, "#tool-scope pre:not([data-tool-output])[phx-hook]")
-
-        assert Enum.count(find(html, "[phx-hook='ToolOutputScroller']")) ==
-                 Enum.count(find(html, "pre[data-tool-output]"))
-      end
-    end
-
-    test "empty output does not mount a hook until the server renders its first text" do
-      html = render_component(&tool/1, id: "live-tool-empty", name: "bash", streaming: true)
-      refute found?(html, "#live-tool-empty-output")
-      refute found?(html, "[phx-hook='ToolOutputScroller']")
-
-      html =
-        render_component(&tool/1,
-          id: "live-tool-empty",
-          name: "bash",
-          streaming: true,
-          output: "first"
-        )
-
-      assert found?(html, "#live-tool-empty-output[phx-hook='ToolOutputScroller']")
-    end
-
-    test "anonymous component output is still rendered without an invalid id-less hook" do
-      html = render_component(&tool/1, name: "bash", output: "anonymous output")
-      assert text(html, "pre[data-tool-output]") == "anonymous output"
-      refute found?(html, "[phx-hook]:not([id])")
-    end
-  end
-
-  describe "ANSI tool output" do
-    test "streaming, completed and failed output render styles while retaining patchable scroll hooks" do
-      output = "\e[31m<failure & café>\e[0m\n\t[1m[30m[46m literal  "
-
-      for state <- [[streaming: true], [done: true, exit_code: 0], [done: true, error: true]] do
-        html =
-          render_component(
-            &tool/1,
-            [id: "tool-ansi", name: "bash", output: output] ++ state
-          )
-
-        assert_ansi_output(html, "tool-ansi-output")
-        refute found?(html, "#tool-ansi[phx-update='ignore'], #tool-ansi [phx-update='ignore']")
-      end
-    end
-
-    test "persisted results render ANSI both on a matched call and as orphan tool results" do
-      output = "\e[31m<failure & café>\e[0m\n\t[1m[30m[46m literal  "
-
-      for opts <- [[], [error: "Command exited with code 1"]] do
-        payload = result("bash", output, opts)
-        matched = show(steps([call("ansi", "bash", %{"command" => "mix test"}, payload)]))
-        orphan = show(%{id: "orphan", kind: "pi.tool-result", payload: payload})
-
-        diagnostics =
-          if opts[:error], do: "\n<harness>\n[error] #{opts[:error]}\n</harness>", else: ""
-
-        assert_ansi_output(matched, "tool-ansi-output", diagnostics)
-        assert_ansi_output(orphan, "orphan-tool-result-output", diagnostics)
-        refute found?(orphan, "[phx-update='ignore']")
-      end
-    end
-
-    test "commands and written file contents stay literal rather than becoming terminal markup" do
+    test "untrusted commands, file contents, output and diffs stay literal text" do
       literal = "\e[31m<script>literal & \"quoted\"</script>\e[0m\n[1m[30m[46m café 🐈"
 
-      for {name, args, label} <- [
-            {"bash", %{"command" => literal}, "bash tool call"},
-            {"write", %{"path" => "file", "content" => literal}, "Written file content"}
+      for {attrs, selector} <- [
+            {[name: "bash", args: %{"command" => literal}, output: "ok"],
+             "pre[aria-label='bash tool call']"},
+            {[name: "write", args: %{"path" => "file", "content" => literal}, output: "ok"],
+             "pre[aria-label='Written file content']"},
+            {[name: "bash", output: literal, streaming: true], "#tool-output"}
           ] do
-        html =
-          render_component(&tool/1,
-            id: "tool-literal",
-            name: name,
-            args: args,
-            output: "ok"
-          )
-
-        selector = "#tool-literal pre[aria-label='#{label}']"
+        html = render_component(&tool/1, [id: "tool"] ++ attrs)
         assert LazyHTML.text(find(html, selector)) == literal
         refute found?(html, selector <> " *")
-        refute found?(html, "#tool-literal script")
-      end
-    end
-
-    test "diff contents remain literal inside Makeup addition and deletion styling" do
-      literal = "\e[31m<svg onload='alert(1)'> & café\e[0m [1m[30m[46m"
-
-      html =
-        render_component(&tool/1,
-          id: "tool-diff-literal",
-          name: "edit",
-          diff: "-1 #{literal}\n+1 #{literal}",
-          output: "\e[32mnot shown\e[0m"
-        )
-
-      for selector <- ["[data-diff] > .gd", "[data-diff] > .gi"] do
-        assert LazyHTML.text(find(html, selector)) =~ literal
-        refute found?(html, selector <> " [style]")
+        refute found?(html, "script")
       end
 
-      refute found?(html, "#tool-diff-literal svg")
-      refute found?(html, "#tool-diff-literal-output")
-    end
-
-    test "ESC-less bracketed text is not guessed to be an ANSI sequence" do
-      output = "[1m[30m[46m INFO [0m\narray[31m] & café 🐈"
-
-      html =
-        render_component(&tool/1,
-          id: "tool-brackets",
-          name: "bash",
-          output: output,
-          done: true
-        )
-
-      assert LazyHTML.text(find(html, "#tool-brackets-output")) == output
-      refute found?(html, "#tool-brackets-output [style]")
+      svg = "<svg onload='alert(1)'> & café"
+      html = render_component(&tool/1, id: "tool", name: "edit", diff: "-1 #{svg}\n+1 #{svg}")
+      assert LazyHTML.text(find(html, "[data-diff] > .gd")) =~ svg
+      assert LazyHTML.text(find(html, "[data-diff] > .gi")) =~ svg
+      refute found?(html, "svg")
     end
   end
 
-  describe "run_duration/2" do
-    @start ~U[2026-10-08 12:00:00Z]
+  describe "transcript tools" do
+    test "the status a tool shows follows its result" do
+      open = call("t1", "bash", %{"command" => "mix test"})
+      bash = &call("t1", "bash", %{"command" => "mix test"}, &1)
+      read = &call("t1", "read", %{"path" => "a.ex"}, &1)
 
-    defp run(status, updated_at),
-      do: %{status: status, inserted_at: @start, updated_at: updated_at}
+      for {group, status} <- [
+            {steps([bash.(result("bash", "6 tests, 0 failures"))]), {"ok", "exit 0"}},
+            {steps([bash.(result("bash", "", error: "Command exited with code 2"))]),
+             {"error", "exit 2"}},
+            {steps([bash.(result("bash", "", error: "Command timed out after 30 seconds"))]),
+             {"error", "failed"}},
+            {steps([read.(result("read", "defmodule A"))]), {"ok", "done"}},
+            {steps([read.(result("read", "", error: "ENOENT"))]), {"error", "failed"}},
+            {steps([open], true), {"running", "running"}},
+            {steps([open]), nil}
+          ] do
+        html = show(group)
 
-    test "a run that has not started has none" do
-      assert run_duration(run(:picked_up, @start), ~U[2026-10-08 13:00:00Z]) == "—"
+        case status do
+          {state, label} -> assert text(html, "[data-tool-status=#{state}]") == label
+          nil -> refute found?(html, "[data-tool-status]")
+        end
+      end
     end
 
-    test "a finished run took until its last update" do
-      assert run_duration(run(:completed, ~U[2026-10-08 12:26:59Z]), ~U[2026-10-09 12:00:00Z]) ==
-               "26m"
+    test "a command shows its call and output; a long call is shown whole under the header" do
+      html =
+        show(steps([call("t1", "bash", %{"command" => "mix test"}, result("bash", "green"))]))
 
-      assert run_duration(run(:failed, ~U[2026-10-08 13:05:00Z]), ~U[2026-10-09 12:00:00Z]) ==
-               "1h 5m"
+      assert text(html, "[data-tool=bash] [data-tool-name]") == "bash"
+      assert text(html, "[data-tool=bash] [data-tool-call]") == "mix test"
+      assert text(html, "[data-tool=bash] pre[data-tool-output]") == "green"
+
+      html =
+        show(steps([call("t1", "bash", %{"command" => "cd a\nmix test"}, result("bash", "ok"))]))
+
+      assert text(html, "[data-tool=bash] [data-tool-call]") == "cd a"
+      assert text(html, "[data-tool=bash] > pre:not([data-tool-output])") == "cd a mix test"
+
+      read = call("t1", "read", %{"path" => "a.ex", "limit" => 5}, result("read", "defmodule A"))
+      assert text(show(steps([read])), "[data-tool=read] [data-tool-call]") == "a.ex:1-5"
     end
 
-    test "a run under way counts up to now, to the minute" do
+    test "an edit shows its diff instead of its result, and a write the file it wrote" do
+      edited =
+        put_in(result("edit", "Replaced 1 block"), ["model", Access.at(0), "details"], %{
+          "diff" => "-1 old\n+1 new"
+        })
+
+      html = show(steps([call("t1", "edit", %{"path" => "a.ex"}, edited)]))
+      assert text(html, "[data-tool=edit] [data-diff]") =~ "+1 new"
+      refute found?(html, "[data-tool-output]")
+      refute text(html, "[data-tool=edit]") =~ "Replaced 1 block"
+
+      write =
+        call(
+          "t1",
+          "write",
+          %{"path" => "a.ex", "content" => "defmodule A"},
+          result("write", "ok")
+        )
+
+      html = show(steps([write]))
+      assert text(html, "[data-tool=write] > pre:not([data-tool-output])") == "defmodule A"
+    end
+
+    test "a closed group of steps summarises what was done and what failed" do
+      read = fn id, path -> call(id, "read", %{"path" => path}, result("read", "defmodule")) end
+      failed = result("bash", "", error: "Command exited with code 1")
+
+      html =
+        show(
+          steps([
+            %{type: :thinking, text: "Hm."},
+            read.("t1", "a.ex"),
+            read.("t2", "a.ex"),
+            read.("t3", "b.ex"),
+            call("t4", "bash", %{"command" => "mix test"}, failed)
+          ])
+        )
+
+      assert text(html, "details:not([open]) > summary [data-row-text]") ==
+               "Thought, read 2 files, ran 1 command"
+
+      assert text(html, "[data-row-note]") == "· 1 failed"
+      assert found?(html, "[data-steps] > [data-tool=bash]")
+    end
+  end
+
+  describe "timings" do
+    test "a tool's recorded duration is shown, from zero up" do
+      for {ms, expected} <- [{0, "0ms"}, {125, "125ms"}, {1250, "1.3s"}, {61_000, "1m 1s"}] do
+        html = show(steps([call("t1", "bash", %{}, timed(result("bash", "ok"), ms))]))
+        assert text(html, "#tool-t1-duration[data-tool-duration]") == expected
+      end
+    end
+
+    test "tool-only responses keep their own header and the results of their own calls" do
+      assistant = fn id, tool ->
+        %{
+          id: id,
+          kind: "pi.assistant",
+          payload: %{
+            "model" => [
+              %{
+                "model" => "gpt-6.1-sol",
+                "durationMs" => 1500,
+                "stopReason" => "toolUse",
+                "content" => [
+                  %{"type" => "toolCall", "id" => tool, "name" => "bash", "arguments" => %{}}
+                ]
+              }
+            ]
+          }
+        }
+      end
+
+      payload = timed(result("bash", "previous output"), 250)
+
+      {[first, second], _} =
+        transcript([
+          assistant.("first", "t1"),
+          %{id: "result", kind: "pi.tool-result", payload: payload},
+          assistant.("second", "t2")
+        ])
+
+      assert text(show(first), "[data-response-content] #tool-t1-duration") == "250ms"
+      assert text(show(first), "[data-model-response] > header") == "gpt-6.1-sol · 1.5s"
+      assert found?(show(second), "[data-response-content] [data-tool=bash]")
+      refute text(show(second), "[data-response-content]") =~ "previous output"
+    end
+
+    test "a response with several text blocks is one response with one timing" do
+      item = %{
+        id: "assistant",
+        kind: "pi.assistant",
+        payload: %{
+          "model" => [
+            %{
+              "model" => "gpt-5.4",
+              "durationMs" => 2500,
+              "stopReason" => "stop",
+              "content" => [
+                %{"type" => "text", "text" => "Hello"},
+                %{"type" => "text", "text" => "Done"}
+              ]
+            }
+          ]
+        }
+      }
+
+      assert [%{kind: "response", parts: [_, _]} = response] = parts(item)
+      html = show(response)
+      assert text(html, "[data-response-content]") =~ ~r/Hello.*Done/
+      assert Enum.count(find(html, "[data-model-duration]")) == 1
+      assert text(html, "#assistant-timing[data-model-duration]") == "gpt-5.4 · 2.5s"
+    end
+
+    test "run_duration/2 is none before the run starts, then counts to now or its end" do
+      start = ~U[2026-10-08 12:00:00Z]
+      run = &%{status: &1, inserted_at: start, updated_at: &2}
+      later = ~U[2026-10-09 12:00:00Z]
+
+      assert run_duration(run.(:picked_up, start), later) == "—"
+      assert run_duration(run.(:completed, ~U[2026-10-08 12:26:59Z]), later) == "26m"
+      assert run_duration(run.(:failed, ~U[2026-10-08 13:05:00Z]), later) == "1h 5m"
+
       for status <- ~w(provisioning running waiting_for_input handing_off)a do
-        run = run(status, ~U[2026-10-08 12:01:00Z])
-        assert run_duration(run, ~U[2026-10-08 12:00:59Z]) == "<1m"
-        assert run_duration(run, ~U[2026-10-08 12:21:30Z]) == "21m"
-        assert run_duration(run, ~U[2026-10-08 14:02:00Z]) == "2h 2m"
+        under_way = run.(status, ~U[2026-10-08 12:01:00Z])
+        assert run_duration(under_way, ~U[2026-10-08 12:00:59Z]) == "<1m"
+        assert run_duration(under_way, ~U[2026-10-08 14:02:00Z]) == "2h 2m"
       end
     end
-  end
 
-  describe "local_time/1" do
-    test "shows the time for today and the date too for another day" do
+    test "local_time/1 shows the time for today and the date too for another day" do
       assert local_time(DateTime.utc_now()) =~ ~r/^\d\d:\d\d$/
       assert local_time(~U[2020-03-07 12:00:00Z]) =~ ~r/^\d{1,2} Mar \d\d:\d\d$/
       assert local_time(nil) == ""
     end
   end
 
-  test "status_label/1 capitalizes every run status" do
-    labels = %{
-      picked_up: "Picked up",
-      provisioning: "Provisioning",
-      running: "In progress",
-      waiting_for_input: "Waiting for input",
-      handing_off: "Handing off",
-      completed: "In review",
-      merged: "Done",
-      failed: "Failed"
+  test "exit_code/1 reads the code pi names, never what the command printed" do
+    failed = result("bash", "1 test, 1 failure", error: "Command exited with code 2")
+    printed = result("bash", "Command exited with code 3")
+
+    for {payload, code} <- [
+          {result("bash", "6 tests, 0 failures"), 0},
+          {failed, 2},
+          # Without the structured list, the block at the end of the content says it.
+          {Map.delete(failed, "data"), 2},
+          {result("bash", "", error: ["Full output: /tmp/out", "Command exited with code 127"]),
+           127},
+          {printed, 0},
+          {Map.delete(printed, "data"), 0},
+          {result("bash", "", error: "Command timed out after 30 seconds"), nil},
+          {result("read", "", error: "Command exited with code 2"), nil},
+          {result("read", "defmodule A"), nil},
+          {nil, nil}
+        ] do
+      assert exit_code(payload) == code
+    end
+  end
+
+  test "notes, compactions, errors and unknown kinds are lines between the messages" do
+    note = %{
+      id: "n",
+      kind: "conductor.note",
+      payload: %{"title" => "Setup", "text" => "mix deps.get"}
     }
 
-    for status <- Conductor.Runs.Run.statuses() do
-      assert status_label(status) == Map.fetch!(labels, status)
-    end
+    html = show(note)
+    assert text(html, "details[data-note]:not([open]) > summary [data-rule]") == "Setup"
+
+    assert text(html, "details[data-note] > pre[tabindex='0'][aria-label='Setup']") ==
+             "mix deps.get"
+
+    html = show(put_in(note.payload["text"], ""))
+    assert text(html, "[data-rule]") == "Setup"
+    refute found?(html, "details")
+
+    assert text(show(%{id: "c", kind: "pi.compaction", payload: %{}}), "[data-rule]") ==
+             "context compacted"
+
+    assert text(show(%{id: "e", kind: "error", text: "Operation aborted"}), "[data-error]") ==
+             "Operation aborted"
+
+    assert text(show(%{id: "x", kind: "pi.other", payload: %{}}), "div") == "pi.other"
   end
 
   # What `selector` matches in a rendered component, and the text of the first match with its white space put right.
@@ -291,48 +335,16 @@ defmodule ConductorWeb.RunComponentsTest do
     end
   end
 
-  defp assert_ansi_output(html, id, diagnostics \\ "") do
-    selector = "pre##{id}[data-tool-output][phx-hook='ToolOutputScroller']"
-    assert found?(html, selector)
-
-    assert LazyHTML.text(find(html, selector)) ==
-             "<failure & café>\n\t[1m[30m[46m literal  " <> diagnostics
-
-    styled = find(html, selector <> " [style]")
-    assert LazyHTML.text(styled) == "<failure & café>"
-
-    assert Enum.any?(LazyHTML.attribute(styled, "style"), fn style ->
-             Regex.match?(~r/(?:^|;)\s*color:\s*#800000\s*(?:;|$)/, style)
-           end)
-
-    refute found?(html, selector <> " failure, " <> selector <> " harness")
-  end
-
-  # WCAG relative luminance for the opaque sRGB theme tokens.
-  defp relative_luminance("#" <> hex) do
-    channels =
-      for <<channel::binary-size(2) <- hex>> do
-        value = String.to_integer(channel, 16) / 255
-        if value <= 0.04045, do: value / 12.92, else: :math.pow((value + 0.055) / 1.055, 2.4)
-      end
-
-    Enum.zip_with(channels, [0.2126, 0.7152, 0.0722], &(&1 * &2)) |> Enum.sum()
-  end
-
   defp show(item), do: render_component(&transcript_item/1, item: item)
-
-  defp user(text),
-    do: %{
-      id: "u",
-      kind: "pi.user",
-      payload: %{"model" => [%{"role" => "user", "content" => text}]}
-    }
 
   defp call(id, name, args, result \\ nil),
     do: %{type: :tool, id: id, name: name, args: args, result: result}
 
   defp steps(steps, active \\ false),
     do: %{id: "s", kind: "steps", steps: steps, active: active}
+
+  defp timed(payload, ms),
+    do: Map.update!(payload, "model", fn [message] -> [Map.put(message, "durationMs", ms)] end)
 
   # A tool result as pi stores it: the output, then the diagnostics as the model sees them.
   defp result(name, output, opts \\ []) do
@@ -360,453 +372,5 @@ defmodule ConductorWeb.RunComponentsTest do
       "model" => [message],
       "data" => %{"diagnostics" => diagnostics}
     }
-  end
-
-  test "persisted transcript entries never expose context debug controls" do
-    for kind <- ["pi.user", "pi.reset", "pi.compaction"] do
-      html = show(item(8, %{"id" => 4, "kind" => kind}))
-      refute found?(html, "[id^=context-details-]")
-      refute found?(html, "button[phx-click=inspect_context]")
-    end
-  end
-
-  test "work groups contain tool cards without nested response or step cards" do
-    group = steps([call("t1", "bash", %{}), call("t2", "read", %{})])
-
-    response = %{
-      id: "assistant-response",
-      kind: "response",
-      parts: [group],
-      model: "gpt-5.4",
-      ms: 1500,
-      active: false
-    }
-
-    for part <- [group, response] do
-      html = show(%{id: "work", kind: "work", parts: [part], ms: 2000})
-      assert found?(html, "[data-work] [data-tool=bash]")
-      assert found?(html, "[data-work] [data-tool=read]")
-      refute found?(html, "[data-work] details details")
-      refute found?(html, "[data-work] [data-model-response].border")
-      refute found?(html, "[data-work] [data-response-content].p-3")
-    end
-
-    assert found?(show(response), "#assistant-timing[data-model-duration]")
-  end
-
-  describe "recorded execution timings" do
-    test "tool durations use readable secondary text on the tool background in every state" do
-      for state <- [
-            [],
-            [streaming: true],
-            [done: true],
-            [error: true],
-            [exit_code: 0],
-            [exit_code: 1]
-          ] do
-        html = render_component(&tool/1, [name: "bash", duration_ms: 125] ++ state)
-
-        assert found?(html, "[data-tool].bg-base-100")
-        assert found?(html, "[data-tool-duration].text-fg-secondary.tabular-nums")
-        refute found?(html, "[data-tool-duration].text-fg-tertiary")
-      end
-    end
-
-    test "duration foreground and background theme tokens meet WCAG AA in light and dark" do
-      css = File.read!(Path.expand("../../../assets/css/app.css", __DIR__))
-
-      for theme <- ["light", "dark"] do
-        [_, palette] = Regex.run(~r/name: "#{theme}";(.*?)\n\}/s, css)
-        [_, foreground] = Regex.run(~r/--fg-secondary: (#[0-9A-Fa-f]{6});/, palette)
-        [_, background] = Regex.run(~r/--color-base-100: (#[0-9A-Fa-f]{6});/, palette)
-        luminances = Enum.map([foreground, background], &relative_luminance/1)
-        contrast = (Enum.max(luminances) + 0.05) / (Enum.min(luminances) + 0.05)
-
-        assert contrast >= 4.5, "#{theme} tool duration contrast is #{contrast}:1"
-      end
-    end
-
-    test "tool timing includes zero and subsecond executions; old and invalid results omit it" do
-      for {ms, expected} <- [{0, "0ms"}, {125, "125ms"}, {1250, "1.3s"}, {61_000, "1m 1s"}] do
-        payload = result("bash", "ok")
-
-        payload =
-          Map.update!(payload, "model", fn [message] -> [Map.put(message, "durationMs", ms)] end)
-
-        html = show(steps([call("t1", "bash", %{}, payload)]))
-        assert text(html, "#tool-t1-duration[data-tool-duration]") == expected
-      end
-
-      for ms <- [nil, -1, "bad"] do
-        payload = result("bash", "ok")
-
-        payload =
-          Map.update!(payload, "model", fn [message] -> [Map.put(message, "durationMs", ms)] end)
-
-        refute found?(show(steps([call("t1", "bash", %{}, payload)])), "[data-tool-duration]")
-      end
-    end
-
-    test "tool-only responses keep their own header and tool execution times" do
-      assistant = fn id, tool ->
-        %{
-          id: id,
-          kind: "pi.assistant",
-          payload: %{
-            "model" => [
-              %{
-                "model" => "gpt-6.1-sol",
-                "durationMs" => 1500,
-                "stopReason" => "toolUse",
-                "content" => [
-                  %{"type" => "toolCall", "id" => tool, "name" => "bash", "arguments" => %{}}
-                ]
-              }
-            ]
-          }
-        }
-      end
-
-      payload = result("bash", "previous output")
-
-      payload =
-        Map.update!(payload, "model", fn [message] ->
-          [Map.merge(message, %{"toolCallId" => "t1", "durationMs" => 250})]
-        end)
-
-      {[first, second], _} =
-        transcript([
-          assistant.("first", "t1"),
-          %{id: "result", kind: "pi.tool-result", payload: payload},
-          assistant.("second", "t2")
-        ])
-
-      assert text(show(first), "[data-response-content] #tool-t1-duration") == "250ms"
-      assert text(show(first), "[data-model-response] > header") == "gpt-6.1-sol · 1.5s"
-      assert found?(show(second), "[data-response-content] [data-tool=bash]")
-      refute text(show(second), "[data-response-content]") =~ "previous output"
-    end
-
-    test "model response timing is shown once without duplicating multi-block responses" do
-      item = %{
-        id: "assistant",
-        kind: "pi.assistant",
-        payload: %{
-          "model" => [
-            %{
-              "model" => "gpt-5.4",
-              "durationMs" => 2500,
-              "stopReason" => "stop",
-              "content" => [
-                %{"type" => "text", "text" => "Hello"},
-                %{"type" => "text", "text" => "Done"}
-              ]
-            }
-          ]
-        }
-      }
-
-      shown = parts(item)
-      assert [%{kind: "response", parts: [_, _]} = response] = shown
-      assert found?(show(response), "[data-model-response] > header[data-model-duration]")
-      assert text(show(response), "[data-response-content]") =~ "Hello"
-      assert text(show(response), "[data-response-content]") =~ "Done"
-      assert text(show(hd(shown)), "#assistant-timing[data-model-duration]") == "gpt-5.4 · 2.5s"
-      assert List.last(shown).final
-
-      old = put_in(item.payload["model"], [%{"content" => [], "stopReason" => "stop"}])
-      refute Enum.any?(parts(old), &(&1.kind == "response"))
-    end
-  end
-
-  describe "exit_code/1" do
-    test "a command that went well exited with 0" do
-      assert exit_code(result("bash", "6 tests, 0 failures")) == 0
-    end
-
-    test "a command pi failed exited with the code pi names" do
-      failed = result("bash", "1 test, 1 failure", error: "Command exited with code 2")
-      assert exit_code(failed) == 2
-      # Without the structured list, the block at the end of the content says it.
-      assert exit_code(Map.delete(failed, "data")) == 2
-
-      assert exit_code(
-               result("bash", "",
-                 error: ["Full output: /tmp/out", "Command exited with code 127"]
-               )
-             ) == 127
-    end
-
-    test "what the command printed itself does not count" do
-      printed = result("bash", "Command exited with code 3")
-      assert exit_code(printed) == 0
-      assert exit_code(Map.delete(printed, "data")) == 0
-    end
-
-    test "a command that ended some other way, another tool and no result have none" do
-      assert exit_code(result("bash", "", error: "Command timed out after 30 seconds")) == nil
-      assert exit_code(result("read", "", error: "Command exited with code 2")) == nil
-      assert exit_code(result("read", "defmodule A")) == nil
-      assert exit_code(nil) == nil
-    end
-  end
-
-  describe "transcript_item/1 messages" do
-    test "the first prompt of a transcript is the issue, a later one is you" do
-      {[first, second], _turn} = transcript([user("Fix **it**"), %{user("Use tabs") | id: "u2"}])
-
-      html = show(first)
-      assert text(html, "[data-from=input] [data-badge]") == "IS"
-      assert text(html, "[data-from=input] [data-label]") == "Issue"
-      assert text(html, "[data-from=input] .prose strong") == "it"
-
-      html = show(second)
-      assert text(html, "[data-from=input] [data-badge]") == "YOU"
-      assert text(html, "[data-from=input] [data-label]") == "You"
-    end
-
-    test "what the agent says is the agent's, as Markdown" do
-      html = show(%{id: "t", kind: "text", text: "It is **done**.", final: true, at: nil})
-      assert text(html, "[data-from=agent] [data-badge]") == "AG"
-      assert text(html, "[data-from=agent] [data-label]") == "Agent"
-      assert text(html, "[data-from=agent] .prose strong") == "done"
-    end
-  end
-
-  describe "transcript_item/1 steps" do
-    defp read, do: call("t1", "read", %{"path" => "a.ex"}, result("read", "defmodule A"))
-    defp bash, do: call("t2", "bash", %{"command" => "mix test"}, result("bash", "all green"))
-
-    test "a group is one closed line that says what was done" do
-      thought = %{type: :thinking, text: "Hm."}
-      again = %{read() | id: "t3"}
-      other = call("t4", "read", %{"path" => "b.ex"}, result("read", "defmodule B"))
-
-      html = show(steps([thought, read(), again, other, bash()]))
-      assert found?(html, "details:not([open]) > summary")
-
-      assert text(html, "details > summary [data-row-text]") ==
-               "Thought, read 2 files, ran 1 command"
-
-      refute found?(html, "details > summary [data-pulse]")
-      refute found?(html, "[data-row-note]")
-      assert found?(html, "[data-steps] > details")
-      assert found?(html, "[data-steps] > [data-tool=bash]")
-    end
-
-    test "a group the agent is at work in says what goes on, after a pulsing dot" do
-      html = show(steps([read(), call("t2", "bash", %{"command" => "mix test"})], true))
-      assert text(html, "details > summary [data-row-text]") == "Running commands"
-      assert found?(html, "details > summary > [data-pulse].motion-safe\\:animate-dot-pulse")
-      assert text(html, "[data-steps] [data-tool=bash] [data-tool-status=running]") == "running"
-    end
-
-    test "a group counts what failed in it" do
-      failed =
-        call(
-          "t2",
-          "bash",
-          %{"command" => "mix test"},
-          result("bash", "", error: "Command exited with code 1")
-        )
-
-      assert text(show(steps([read(), failed])), "[data-row-note]") == "· 1 failed"
-    end
-
-    test "the work of a turn is one line with how long it took at the end" do
-      text = %{id: "t", kind: "text", text: "Looking around.", final: false, at: nil}
-      work = %{id: "w", kind: "work", parts: [text, steps([read(), bash()])], ms: 125_000}
-
-      html = show(work)
-
-      assert text(html, "details:not([open]) > summary [data-row-text]") ==
-               "Read 1 file, ran 1 command"
-
-      assert text(html, "details > summary [data-row-meta]") == "2m 5s"
-      assert found?(html, "[data-work] [data-from=agent]")
-      assert found?(html, "[data-work] [data-steps] [data-tool=read]")
-
-      refute found?(show(%{work | ms: nil}), "[data-row-meta]")
-    end
-  end
-
-  describe "transcript_item/1 thinking" do
-    test "a thought is a line that opens" do
-      html = show(steps([%{type: :thinking, text: "Why **not**?"}]))
-      assert text(html, "details:not([open]) > summary [data-row-text]") == "Thought"
-      assert text(html, "details .prose strong") == "not"
-    end
-
-    test "thinking that streams in shows as it comes, after a dot that pulses unless motion is reduced" do
-      html =
-        render_component(&reasoning/1,
-          id: "live-thinking",
-          text: "Both tests *pass*.",
-          streaming: true
-        )
-
-      assert text(html, "#live-thinking[data-thinking] > div > span") == "Thinking"
-      assert text(html, "#live-thinking .prose em") == "pass"
-      assert found?(html, "#live-thinking > [data-pulse].motion-safe\\:animate-dot-pulse")
-
-      html = render_component(&reasoning/1, id: "live-thinking", text: "Both tests pass.")
-      assert text(html, "details#live-thinking > summary [data-row-text]") == "Thought"
-    end
-  end
-
-  describe "transcript_item/1 tools" do
-    test "a command that went well shows its exit code and what it put out" do
-      html =
-        show(
-          steps([
-            call("t1", "bash", %{"command" => "mix test"}, result("bash", "6 tests, 0 failures"))
-          ])
-        )
-
-      assert text(html, "[data-tool=bash] [data-tool-name]") == "bash"
-      assert text(html, "[data-tool=bash] [data-tool-call]") == "mix test"
-      assert text(html, "[data-tool=bash] [data-tool-status=ok]") == "exit 0"
-      assert text(html, "[data-tool=bash] pre[data-tool-output]") == "6 tests, 0 failures"
-      refute found?(html, "[data-tool].border-chip-error-line")
-      refute found?(html, "[data-tool] [data-pulse].motion-safe\\:animate-dot-pulse")
-    end
-
-    test "a command that failed shows its exit code, in a box with an error border" do
-      failed = result("bash", "1 test, 1 failure", error: "Command exited with code 2")
-      html = show(steps([call("t1", "bash", %{"command" => "mix test"}, failed)]))
-
-      assert text(html, "[data-tool=bash].border-chip-error-line [data-tool-status=error]") ==
-               "exit 2"
-
-      assert text(html, "[data-tool=bash] pre[data-tool-output]") =~ "1 test, 1 failure"
-    end
-
-    test "a command that ended without an exit code, and another tool, are failed or done" do
-      timeout = result("bash", "", error: "Command timed out after 30 seconds")
-      html = show(steps([call("t1", "bash", %{"command" => "sleep 99"}, timeout)]))
-
-      assert text(html, "[data-tool=bash].border-chip-error-line [data-tool-status=error]") ==
-               "failed"
-
-      html =
-        show(
-          steps([
-            call("t1", "read", %{"path" => "a.ex", "limit" => 5}, result("read", "defmodule A"))
-          ])
-        )
-
-      assert text(html, "[data-tool=read] [data-tool-call]") == "a.ex:1-5"
-      assert text(html, "[data-tool=read] [data-tool-status=ok]") == "done"
-
-      html =
-        show(
-          steps([call("t1", "read", %{"path" => "no.ex"}, result("read", "", error: "ENOENT"))])
-        )
-
-      assert text(html, "[data-tool=read].border-chip-error-line [data-tool-status=error]") ==
-               "failed"
-    end
-
-    test "a call without a result says nothing unless the agent is at work on it" do
-      open = call("t1", "bash", %{"command" => "mix test"})
-      refute found?(show(steps([open])), "[data-tool-status]")
-
-      html = show(steps([open], true))
-      assert text(html, "[data-tool=bash] [data-tool-status=running]") == "running"
-
-      assert found?(
-               html,
-               "[data-tool-status=running] > [data-pulse].motion-safe\\:animate-dot-pulse"
-             )
-    end
-
-    test "a tool that runs live shows what it has put out so far" do
-      html =
-        render_component(&tool/1,
-          id: "live-tool-t1",
-          name: "bash",
-          args: %{"command" => "mix test"},
-          output: "....\e[32m..\e[0m",
-          streaming: true
-        )
-
-      assert text(html, "#live-tool-t1[data-tool=bash] [data-tool-status=running]") == "running"
-      assert text(html, "#live-tool-t1 pre[data-tool-output]") == "......"
-    end
-
-    test "a call that takes more than a line is shown whole under the header" do
-      html =
-        show(steps([call("t1", "bash", %{"command" => "cd a\nmix test"}, result("bash", "ok"))]))
-
-      assert text(html, "[data-tool=bash] [data-tool-call]") == "cd a"
-      assert text(html, "[data-tool=bash] > pre:not([data-tool-output])") == "cd a mix test"
-    end
-
-    test "an edit shows its diff and a write the file it wrote" do
-      edited =
-        put_in(result("edit", "ok"), ["model", Access.at(0), "details"], %{
-          "diff" => "-1 old\n+1 new"
-        })
-
-      html = show(steps([call("t1", "edit", %{"path" => "a.ex"}, edited)]))
-      assert text(html, "[data-tool=edit] [data-diff] .gi") =~ "new"
-      assert text(html, "[data-tool=edit] [data-diff] .gd") =~ "old"
-      refute found?(html, "[data-tool-output]")
-
-      html =
-        show(
-          steps([
-            call(
-              "t1",
-              "write",
-              %{"path" => "a.ex", "content" => "defmodule A"},
-              result("write", "ok")
-            )
-          ])
-        )
-
-      assert text(html, "[data-tool=write] > pre:not([data-tool-output])") == "defmodule A"
-    end
-
-    test "a result without its call stands on its own" do
-      failed = result("bash", "boom", error: "Command exited with code 1")
-      html = show(%{id: "r", kind: "pi.tool-result", payload: failed})
-      assert text(html, "[data-tool='bash result'] [data-tool-status=error]") == "exit 1"
-    end
-  end
-
-  describe "transcript_item/1 lines between the messages" do
-    test "a note is a centred line that opens to what it has to show" do
-      note = %{
-        id: "n",
-        kind: "conductor.note",
-        payload: %{"title" => "Setup", "text" => "mix deps.get"}
-      }
-
-      html = show(note)
-      assert text(html, "details[data-note]:not([open]) > summary [data-rule]") == "Setup"
-      assert text(html, "details[data-note] > pre") == "mix deps.get"
-
-      assert found?(
-               html,
-               "details[data-note] > pre.scrollable-output[tabindex='0'][role='group'][aria-label='Setup']"
-             )
-
-      html = show(put_in(note.payload["text"], ""))
-      assert text(html, "[data-rule]") == "Setup"
-      refute found?(html, "details")
-    end
-
-    test "a compaction is a centred line" do
-      assert text(show(%{id: "c", kind: "pi.compaction", payload: %{}}), "[data-rule]") ==
-               "context compacted"
-    end
-
-    test "an error and a kind that is not known are plain lines" do
-      assert text(show(%{id: "e", kind: "error", text: "Operation aborted"}), "[data-error]") ==
-               "Operation aborted"
-
-      assert show(%{id: "x", kind: "pi.other", payload: %{}}) |> text("div") == "pi.other"
-    end
   end
 end

@@ -20,26 +20,12 @@ defmodule Conductor.Runs.Run do
     table "runs"
     repo Conductor.Repo
 
-    migration_types id: :string,
-                    issue_key: :string,
-                    workspace_path: :string,
-                    branch: :string,
-                    outcome: :string,
-                    pr_url: :string,
-                    status: :string,
-                    attempt: :integer
-
-    migration_defaults inserted_at: "nil", updated_at: "nil", status: "nil"
-
     references do
       reference :project, on_delete: :restrict
     end
 
-    identity_index_names issue_key_attempt: "runs_issue_key_attempt_index"
-
     custom_indexes do
-      index [:issue_key], name: "runs_issue_key_index"
-      index [:status], name: "runs_status_index"
+      index [:status]
     end
   end
 
@@ -56,6 +42,7 @@ defmodule Conductor.Runs.Run do
       transition :settle, from: [:provisioning, :running, :waiting_for_input], to: :handing_off
       transition :complete, from: :handing_off, to: :completed
       transition :resume_review, from: :completed, to: :running
+      transition :continue, from: :failed, to: :running
       transition :return_to_review, from: :running, to: :completed
       transition :merge, from: :completed, to: :merged
       transition :hand_off_failed, from: :handing_off, to: :failed
@@ -107,6 +94,7 @@ defmodule Conductor.Runs.Run do
       :settle,
       :complete,
       :resume_review,
+      :continue,
       :return_to_review,
       :merge,
       :hand_off_failed,
@@ -175,6 +163,14 @@ defmodule Conductor.Runs.Run do
       change transition_state(:running)
     end
 
+    # The agent goes on in the same conversation and workspace; the failure is no longer the run's.
+    update :continue do
+      accept []
+      change set_attribute(:error, nil)
+      change set_attribute(:outcome, nil)
+      change transition_state(:running)
+    end
+
     update :return_to_review do
       accept []
       change transition_state(:completed)
@@ -228,7 +224,7 @@ defmodule Conductor.Runs.Run do
     attribute :pr_url, :string, public?: true, constraints: [trim?: false]
 
     # The model choices the runner got in `start_run`, by role (`head`, `low`, `medium`, `high`), each
-    # `%{"provider" => _, "modelId" => _, "reasoning" => _}`. A run from before they were kept has none.
+    # `%{"provider" => _, "modelId" => _, "reasoning" => _}`; set when the run is provisioned.
     attribute :models, :map, public?: true
     attribute :classifications, :map, public?: true
     create_timestamp :inserted_at, type: :utc_datetime
@@ -239,10 +235,6 @@ defmodule Conductor.Runs.Run do
     belongs_to :project, Conductor.Config.Project do
       attribute_type :integer
       allow_nil? false
-      public? true
-    end
-
-    has_many :questions, Conductor.Runs.Question do
       public? true
     end
   end

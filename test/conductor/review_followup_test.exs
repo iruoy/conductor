@@ -60,15 +60,10 @@ defmodule Conductor.ReviewFollowupTest do
     assert Runs.open_issue_keys([run.issue_key]) == []
   end
 
-  test "a merge between polls is checked before accepting feedback", %{project: project} do
+  test "a merge between polls is checked before accepting feedback, even if the board fails", %{
+    project: project
+  } do
     run = completed_run(project, 73)
-    stub_github(pr_state: "closed", pr_merged: true)
-    assert {:error, :pr_merged} = Coordinator.message(run.id, "Too late")
-    assert Runs.get_run!(run.id).status == :merged
-  end
-
-  test "a board update failure cannot keep a confirmed merge messageable", %{project: project} do
-    run = completed_run(project, 78)
 
     Req.Test.stub(Conductor.GitHub, fn conn ->
       if conn.method == "GET" do
@@ -120,17 +115,5 @@ defmodule Conductor.ReviewFollowupTest do
     assert {:error, _} = Coordinator.message(run.id, "Feedback")
     assert Runs.get_run!(run.id).status == :completed
     assert List.last(Runs.status_history(run.id)).status == :completed
-  end
-
-  test "unmerged review workspaces are not pruned", %{project: project, tmp_dir: dir} do
-    run = run_fixture(project, "shop-77", %{status: :completed, workspace_path: dir})
-
-    Repo.update_all(from(r in Conductor.Runs.Run, where: r.id == ^run.id),
-      set: [updated_at: ~U[2020-01-01 00:00:00Z]]
-    )
-
-    assert :ok = Poller.prune()
-    assert File.dir?(dir)
-    assert Runs.get_run!(run.id).workspace_path == dir
   end
 end

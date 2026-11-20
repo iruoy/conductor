@@ -3,8 +3,9 @@ defmodule Conductor.Runs do
   Runs, their persisted transcripts, and their questions.
 
   Changes are broadcast on `"runs"` (`{:run_updated, run}`) and `"run:<id>"` (`{:run_updated, run}`,
-  `{:agent_event, payload}`, `{:question, question}`). Streaming deltas only travel over PubSub; finished messages and
-  tool starts are also persisted, upserted by `(run_id, conversation, entry)`.
+  `{:agent_event, payload}`, `{:question, question}`). A conversation's feed is a `snapshot` (its whole transcript and
+  live state) and then `update`s (new entries, and the live state when it changed). Entries and the compaction failure
+  are persisted, upserted by `(run_id, conversation, entry)`; the live state only travels over PubSub.
   """
   use Ash.Domain
   require Ash.Query
@@ -29,14 +30,6 @@ defmodule Conductor.Runs do
 
   ## Runs
 
-  def list_runs(limit \\ 200) do
-    Run
-    |> Ash.Query.sort(inserted_at: :desc, id: :desc)
-    |> Ash.Query.limit(limit)
-    |> Ash.Query.load(:project)
-    |> Ash.read!()
-  end
-
   @status_groups %{
     all: nil,
     running: ~w(running provisioning handing_off)a,
@@ -51,25 +44,25 @@ defmodule Conductor.Runs do
   def status_groups, do: [:all, :running, :waiting, :completed, :merged, :failed, :picked_up]
 
   @doc """
-  The newest runs in a status group (`:all` for every status) whose id or issue summary contains `text`,
+  The newest 200 runs in a status group (`:all` for every status) whose id or issue summary contains `text`,
   case-insensitive.
   """
-  def filter_runs(group \\ :all, text \\ "", limit \\ 200) do
+  def filter_runs(group, text \\ "") do
     Run
     |> filter_query(group, text)
     |> Ash.Query.sort(inserted_at: :desc, id: :desc)
-    |> Ash.Query.limit(limit)
+    |> Ash.Query.limit(200)
     |> Ash.Query.load(:project)
     |> Ash.read!()
   end
 
-  @doc "How many runs `filter_runs/3` matches, without the limit."
-  def count_runs(group \\ :all, text \\ ""), do: Run |> filter_query(group, text) |> Ash.count!()
+  @doc "How many runs `filter_runs/2` matches, without the limit."
+  def count_runs(group, text \\ ""), do: Run |> filter_query(group, text) |> Ash.count!()
 
   @doc "The true number of runs per status group, as a map keyed by `status_groups/0`."
   def group_counts, do: Map.new(status_groups(), &{&1, count_runs(&1)})
 
-  @doc "Whether a run belongs to the status group and matches the text, as `filter_runs/3` would say."
+  @doc "Whether a run belongs to the status group and matches the text, as `filter_runs/2` would say."
   def matches?(%Run{} = run, group, text) do
     needle = text |> String.trim() |> String.downcase()
     summary = (run.issue_snapshot || %{})["summary"] || ""
@@ -131,6 +124,13 @@ defmodule Conductor.Runs do
 
   def retryable?(%Run{}), do: false
 
+  @doc """
+  A failed run the agent can go on with in the same conversation: the latest attempt, and one that got as far as
+  running (its models are kept when it starts). Whether there is anything to pick up again is the runner's to say.
+  """
+  def continuable?(%Run{models: models} = run) when is_map(models), do: retryable?(run)
+  def continuable?(%Run{}), do: false
+
   @doc "The other runs of the same issue as `run`, the first attempt first."
   def other_attempts(%Run{id: id, issue_key: issue_key}) do
     Run
@@ -140,8 +140,7 @@ defmodule Conductor.Runs do
   end
 
   @doc """
-  The statuses a run has had, the first first, as `%{id: id, status: status, at: at}`. A run from before the
-  history was kept has none.
+  The statuses a run has had, the first first, as `%{id: id, status: status, at: at}`.
   """
   def status_history(run_id) do
     Run.Version
@@ -195,6 +194,7 @@ defmodule Conductor.Runs do
         :settle,
         :complete,
         :resume_review,
+        :continue,
         :return_to_review,
         :merge,
         :hand_off_failed,
@@ -317,7 +317,7 @@ defmodule Conductor.Runs do
   def conversation_end("pi.assistant", "toolUse"), do: :working
   def conversation_end("pi.assistant", _stop), do: :ended
 
-  def conversation_end(kind, _stop) when kind in ~w(pi.user pi.tool-result tool_start),
+  def conversation_end(kind, _stop) when kind in ~w(pi.user pi.tool-result),
     do: :working
 
   def conversation_end(_kind, _stop), do: :ended
@@ -367,11 +367,8 @@ defmodule Conductor.Runs do
   end
 
   def ingest(%{"type" => "question", "run_id" => run_id, "qid" => qid, "text" => text}) do
-    with %Run{} <- Ash.get!(Run, run_id, not_found_error?: false),
-         {:ok, _question} <- upsert_question(run_id, qid, text) do
-      :ok
-    end
-
+    # A question for a run Phoenix does not know is dropped.
+    if Ash.get!(Run, run_id, not_found_error?: false), do: upsert_question(run_id, qid, text)
     :ok
   end
 
@@ -393,42 +390,26 @@ defmodule Conductor.Runs do
 
   def ingest(_event), do: :ok
 
-  defp persist(run_id, conversation, role, %{"type" => "snapshot", "entries" => entries} = event) do
-    rows = Enum.map(entries, &entry_row(run_id, conversation, role, &1))
+  defp persist(run_id, conversation, role, %{"type" => "snapshot"} = event) do
+    rows = Enum.map(event["entries"] || [], &entry_row(run_id, conversation, role, &1))
 
     upsert_events(
       rows ++ [compaction_row(run_id, conversation, role, event["compactionFailure"])]
     )
   end
 
-  defp persist(run_id, conversation, role, %{"type" => "compaction_status"} = event) do
-    persist_compaction(run_id, conversation, role, event["failure"])
-  end
+  defp persist(run_id, conversation, role, %{"type" => "update"} = event) do
+    rows = Enum.map(event["entries"] || [], &entry_row(run_id, conversation, role, &1))
 
-  defp persist(run_id, conversation, role, %{"type" => "message_end", "entry" => entry}) do
-    upsert_events([entry_row(run_id, conversation, role, entry)])
-  end
+    rows =
+      if Map.has_key?(event, "compactionFailure"),
+        do: rows ++ [compaction_row(run_id, conversation, role, event["compactionFailure"])],
+        else: rows
 
-  # Nested calls belong to their parent's result; they do not produce standalone transcript entries.
-  defp persist(_run_id, _conversation, _role, %{
-         "type" => "tool_execution_start",
-         "parentToolCallId" => parent
-       })
-       when is_binary(parent), do: :ok
-
-  defp persist(run_id, conversation, role, %{"type" => "tool_execution_start"} = event) do
-    payload = Map.take(event, ["toolCallId", "toolName", "args"])
-
-    upsert_events([
-      row(run_id, conversation, role, "t:" <> event["toolCallId"], nil, "tool_start", payload)
-    ])
+    if rows != [], do: upsert_events(rows)
   end
 
   defp persist(_run_id, _conversation, _role, _event), do: :ok
-
-  defp persist_compaction(run_id, conversation, role, failure) do
-    upsert_events([compaction_row(run_id, conversation, role, failure)])
-  end
 
   defp compaction_row(run_id, conversation, role, failure) do
     row(run_id, conversation, role, "s:compaction", nil, "conductor.compaction_status", %{

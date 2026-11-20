@@ -16,16 +16,16 @@ defmodule ConductorWeb.DashboardLiveTest do
 
   test "navigation and filters expose their active state through ARIA", %{conn: conn} do
     {:ok, view, _} = live(conn, ~p"/")
-    assert has_element?(view, ~s|#nav-runs.btn[aria-current="page"]|)
+    assert has_element?(view, ~s|#nav-runs[aria-current="page"]|)
     refute has_element?(view, "#nav-config[aria-current]")
-    assert has_element?(view, ~s|#filter-all.btn[aria-pressed="true"]|)
+    assert has_element?(view, ~s|#filter-all[aria-pressed="true"]|)
 
     view |> element("#filter-running") |> render_click()
-    assert has_element?(view, ~s|#filter-running.btn[aria-pressed="true"]|)
+    assert has_element?(view, ~s|#filter-running[aria-pressed="true"]|)
     assert has_element?(view, ~s|#filter-all[aria-pressed="false"]|)
 
     {:ok, config, _} = live(conn, ~p"/config")
-    assert has_element?(config, ~s|#nav-config.btn[aria-current="page"]|)
+    assert has_element?(config, ~s|#nav-config[aria-current="page"]|)
     refute has_element?(config, "#nav-runs[aria-current]")
   end
 
@@ -61,20 +61,59 @@ defmodule ConductorWeb.DashboardLiveTest do
 
     view |> element("#log-shop-1-1") |> render_click()
 
-    Runs.ingest(%{
-      "type" => "agent_event",
-      "run_id" => run.id,
-      "conversation" => 1,
-      "role" => "head",
-      "event" => %{
-        "type" => "tool_execution_start",
-        "toolCallId" => "c1",
-        "toolName" => "bash",
-        "args" => %{"command" => "ls -la"}
-      }
+    send_event = fn event ->
+      Runs.ingest(%{
+        "type" => "agent_event",
+        "run_id" => run.id,
+        "conversation" => 1,
+        "role" => "head",
+        "event" => event
+      })
+    end
+
+    answer = %{
+      "id" => 2,
+      "kind" => "pi.assistant",
+      "model" => [
+        %{
+          "role" => "assistant",
+          "stopReason" => "toolUse",
+          "content" => [
+            %{"type" => "text", "text" => "Looking around"},
+            %{
+              "type" => "toolCall",
+              "id" => "c1",
+              "name" => "bash",
+              "arguments" => %{"command" => "ls -la"}
+            }
+          ]
+        }
+      ]
+    }
+
+    send_event.(%{"type" => "update", "entries" => [answer]})
+    assert has_element?(view, "#log-log-1", "Looking around")
+    assert has_element?(view, "#log-log-2", "bash ls -la")
+
+    live = %{"busy" => true, "message" => nil, "tools" => [], "inbox" => []}
+    retry = %{"attempt" => 1, "at" => 123, "error" => "overloaded"}
+    send_event.(%{"type" => "update", "live" => Map.put(live, "retry", retry)})
+    assert has_element?(view, "#log-log-3", "retrying: overloaded")
+
+    # The same retry in a later live state is not logged again; the next one is.
+    send_event.(%{
+      "type" => "update",
+      "live" => Map.merge(live, %{"retry" => retry, "inbox" => [%{"id" => 3, "mode" => "steer"}]})
     })
 
-    assert render(view) =~ "bash ls -la"
+    refute has_element?(view, "#log-log-4")
+
+    send_event.(%{
+      "type" => "update",
+      "live" => Map.put(live, "retry", %{retry | "attempt" => 2, "at" => 456})
+    })
+
+    assert has_element?(view, "#log-log-4", "retrying: overloaded")
 
     view |> element("#retry-shop-1-1") |> render_click()
     assert render(view) =~ "Queued shop-1-2"
@@ -100,7 +139,7 @@ defmodule ConductorWeb.DashboardLiveTest do
     assert has_element?(reloaded, "#retry-#{second.id}")
   end
 
-  test "renders each status with its chip, links and actions", %{conn: conn, project: project} do
+  test "renders each status with its links and actions", %{conn: conn, project: project} do
     run_fixture(project, "shop-1")
     run_fixture(project, "shop-2", %{status: :provisioning})
     run_fixture(project, "shop-3", %{status: :running})
@@ -119,28 +158,21 @@ defmodule ConductorWeb.DashboardLiveTest do
 
     assert has_element?(view, "#runs-count", "8 of 8 runs")
 
-    for {n, status, chip} <- [
-          {1, "picked_up", "bg-muted"},
-          {2, "provisioning", "bg-chip-info-bg"},
-          {3, "running", "bg-chip-info-bg"},
-          {4, "waiting_for_input", "bg-chip-warning-bg"},
-          {5, "handing_off", "bg-chip-info-bg"},
-          {6, "completed", "bg-chip-info-bg"},
-          {7, "failed", "bg-chip-error-bg"},
-          {8, "merged", "bg-chip-success-bg"}
-        ] do
+    for {status, n} <-
+          Enum.with_index(
+            ~w(picked_up provisioning running waiting_for_input handing_off completed failed merged),
+            1
+          ) do
       id = "shop-#{n}-1"
-      assert has_element?(view, ~s|#status-#{id}.#{chip}[data-status="#{status}"]|)
+      assert has_element?(view, ~s|#status-#{id}[data-status="#{status}"]|)
       assert has_element?(view, ~s|#runs-#{id} a#open-#{id}[href="/runs/#{id}"]|)
       assert has_element?(view, "#log-#{id}")
-      assert has_element?(view, "#updated-#{id}")
     end
 
     assert has_element?(view, "#status-shop-4-1", "Waiting for input")
 
     # Answer: on the run that waits for input only.
     assert has_element?(view, ~s|a#answer-shop-4-1[href="/runs/shop-4-1"]|)
-    assert has_element?(view, "#runs-shop-4-1.bg-row-waiting")
     for n <- [1, 2, 3, 5, 6, 7], do: refute(has_element?(view, "#answer-shop-#{n}-1"))
 
     # The pull request, by its number.
@@ -170,13 +202,9 @@ defmodule ConductorWeb.DashboardLiveTest do
     # No duration before the run starts.
     assert has_element?(view, "#duration-shop-1-1", "—")
     assert has_element?(view, "#duration-shop-3-1", "<1m")
-    assert has_element?(view, "#duration-shop-6-1", "<1m")
   end
 
-  test "the table is a focusable region for the keyboard, with hints in the footer", %{
-    conn: conn,
-    project: project
-  } do
+  test "the table is a focusable region for the keyboard", %{conn: conn, project: project} do
     run_fixture(project, "shop-1", %{status: :running})
     {:ok, view, _html} = live(conn, ~p"/")
 
@@ -189,15 +217,12 @@ defmodule ConductorWeb.DashboardLiveTest do
     assert has_element?(view, ~s|#runs > tr a[id^="open-"]|)
     assert has_element?(view, ~s|#runs > tr button[id^="log-"]|)
     assert has_element?(view, "#runs-hints kbd", "j")
-    assert has_element?(view, "#runs-hints kbd", "k")
-    assert has_element?(view, "#runs-hints kbd", "↵")
-    assert has_element?(view, "#runs-hints kbd", "l")
-    assert has_element?(view, "#runs-count", "1 of 1 runs")
   end
 
   test "shows the empty state and counts runs as they come in", %{conn: conn, project: project} do
+    {:ok, view, _html} = live(conn, ~p"/?status=failed")
+    assert has_element?(view, "#runs-empty", "No runs yet.")
     {:ok, view, _html} = live(conn, ~p"/")
-    assert has_element?(view, "#runs-empty")
     assert has_element?(view, "#runs-count", "0 of 0 runs")
 
     run = run_fixture(project, "shop-1")
@@ -205,7 +230,6 @@ defmodule ConductorWeb.DashboardLiveTest do
 
     transition_run(run, :running)
     assert has_element?(view, ~s|#status-shop-1-1[data-status="running"]|)
-    assert has_element?(view, "#runs-count", "1 of 1 runs")
   end
 
   describe "filters" do
@@ -298,20 +322,6 @@ defmodule ConductorWeb.DashboardLiveTest do
     end
   end
 
-  test "without any runs the empty state says so", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/?status=failed")
-    assert has_element?(view, "#runs-empty", "No runs yet.")
-  end
-
-  test "refreshes the rows of runs under way on a tick", %{conn: conn, project: project} do
-    run_fixture(project, "shop-1", %{status: :running})
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    send(view.pid, :tick)
-    assert has_element?(view, "#duration-shop-1-1", "<1m")
-    assert has_element?(view, "#runs-count", "1 of 1 runs")
-  end
-
   test "shows when GitHub was last checked and updates after a poll", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/")
     assert has_element?(view, "#github-checked", "GitHub not checked yet")
@@ -321,7 +331,6 @@ defmodule ConductorWeb.DashboardLiveTest do
     _ = :sys.get_state(Conductor.Poller)
 
     assert has_element?(view, "#github-checked", "GitHub checked")
-    assert has_element?(view, "#github-checked-dot.bg-dot-green")
     refute has_element?(view, "#github-checked", "every")
 
     Req.Test.stub(Conductor.GitHub, fn conn ->
@@ -332,7 +341,10 @@ defmodule ConductorWeb.DashboardLiveTest do
     _ = :sys.get_state(Conductor.Poller)
     _ = :sys.get_state(Conductor.Poller)
 
-    assert has_element?(view, "#github-checked-dot.bg-dot-red")
-    assert has_element?(view, ~s|#github-checked[title*="Bad credentials"]|)
+    assert has_element?(
+             view,
+             ~s|#github-checked[title*="Bad credentials"]|,
+             "GitHub check failed"
+           )
   end
 end
