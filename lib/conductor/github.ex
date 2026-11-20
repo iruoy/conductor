@@ -7,8 +7,8 @@ defmodule Conductor.GitHub do
   order in which issues are worked, by the order of the field's options). Subtasks are sub-issues in the same
   repository; "blocked by" relationships are the dependencies.
 
-  Configure with `config :conductor, Conductor.GitHub, token: ...` (see runtime.exs) and optionally `base_url` and
-  `req_options` (tests pass `plug: {Req.Test, Conductor.GitHub}`).
+  Configure with `config :conductor, Conductor.GitHub, token: ...` (see runtime.exs) and optionally `req_options`
+  (tests pass `plug: {Req.Test, Conductor.GitHub}`).
   """
 
   @item_fields """
@@ -378,6 +378,7 @@ defmodule Conductor.GitHub do
   Organizations that do not let the token in are left out.
   """
   def projects do
+    # Not `graphql/2`: organizations that refuse the token add errors next to the data of the others.
     case request(method: :post, url: "/graphql", json: %{query: @projects_query, variables: %{}}) do
       {:ok, %{"data" => %{"viewer" => %{} = viewer}}} ->
         organizations = Enum.flat_map(nodes(viewer["organizations"]), &nodes(&1["projectsV2"]))
@@ -423,7 +424,7 @@ defmodule Conductor.GitHub do
   end
 
   @doc "Returns the web URL of the open PR from `branch`, creating it into `base` when there is none."
-  def find_or_create_pr(repo, branch, base, title, description \\ "") do
+  def find_or_create_pr(repo, branch, base, title, description) do
     params = [head: "#{repo.owner}:#{branch}", state: "open"]
 
     with {:ok, existing} <- request(url: "#{repo_path(repo)}/pulls", params: params) do
@@ -505,7 +506,7 @@ defmodule Conductor.GitHub do
 
   defp do_request(config, options) do
     [
-      base_url: config[:base_url] || "https://api.github.com",
+      base_url: "https://api.github.com",
       auth: {:bearer, config[:token]},
       headers: [accept: "application/vnd.github+json", x_github_api_version: "2022-11-28"],
       retry: :transient,

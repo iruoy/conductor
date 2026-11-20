@@ -34,9 +34,8 @@ defmodule Conductor.GitHubTest do
         ] do
       assert {:error, _} = GitHub.pull_request(@repo, url)
     end
-  end
 
-  test "malformed PR responses fail closed instead of allowing feedback" do
+    # A response without `merged` fails closed instead of allowing feedback.
     Req.Test.stub(GitHub, &Req.Test.json(&1, %{"state" => "open"}))
     assert {:error, _} = GitHub.pull_request(@repo, "https://github.com/acme/shop/pull/60")
   end
@@ -420,23 +419,16 @@ defmodule Conductor.GitHubTest do
     assert {:ok, false} = GitHub.branch_exists?(@repo, "feature/2")
   end
 
-  test "find_or_create_pr reuses an open PR" do
-    Req.Test.stub(Conductor.GitHub, fn conn ->
-      assert conn.method == "GET"
-      assert %{"head" => "acme:feature/1", "state" => "open"} = conn.query_params
-      Req.Test.json(conn, [%{"html_url" => "https://github.com/acme/shop/pull/1"}])
-    end)
-
-    assert {:ok, "https://github.com/acme/shop/pull/1"} =
-             GitHub.find_or_create_pr(@repo, "feature/1", "main", "[#1] T")
-  end
-
-  test "find_or_create_pr creates one into the base branch" do
+  test "find_or_create_pr reuses an open PR or creates one into the base branch" do
     test = self()
 
     Req.Test.stub(Conductor.GitHub, fn
       %{method: "GET"} = conn ->
-        Req.Test.json(conn, [])
+        assert %{"head" => "acme:" <> branch, "state" => "open"} = conn.query_params
+
+        if branch == "feature/1",
+          do: Req.Test.json(conn, [%{"html_url" => "https://github.com/acme/shop/pull/1"}]),
+          else: Req.Test.json(conn, [])
 
       %{method: "POST"} = conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -444,13 +436,18 @@ defmodule Conductor.GitHubTest do
         Req.Test.json(conn, %{"html_url" => "https://github.com/acme/shop/pull/2"})
     end)
 
+    assert {:ok, "https://github.com/acme/shop/pull/1"} =
+             GitHub.find_or_create_pr(@repo, "feature/1", "main", "[#1] T", "")
+
+    refute_received {:created, _}
+
     assert {:ok, "https://github.com/acme/shop/pull/2"} =
-             GitHub.find_or_create_pr(@repo, "feature/1", "staging", "[#1] T", "body")
+             GitHub.find_or_create_pr(@repo, "feature/2", "staging", "[#2] T", "body")
 
     assert_received {:created,
                      %{
-                       "title" => "[#1] T",
-                       "head" => "feature/1",
+                       "title" => "[#2] T",
+                       "head" => "feature/2",
                        "base" => "staging",
                        "body" => "body"
                      }}

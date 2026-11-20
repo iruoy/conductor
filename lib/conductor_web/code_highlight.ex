@@ -1,16 +1,16 @@
 defmodule ConductorWeb.CodeHighlight do
-  @moduledoc "Server-rendered syntax highlighting for tool code, with a literal fallback."
+  @moduledoc """
+  Server-rendered syntax highlighting for tool code, with a literal fallback. Elixir, HTML and the EEx family use the
+  native Makeup lexers; every other language (and diffs) goes through syntect's registry entries.
+  """
 
   @lexers %{
     ".ex" => Makeup.Lexers.ElixirLexer,
     ".exs" => Makeup.Lexers.ElixirLexer,
-    ".erl" => Makeup.Lexers.ErlangLexer,
-    ".hrl" => Makeup.Lexers.ErlangLexer,
     ".html" => Makeup.Lexers.HTMLLexer,
     ".htm" => Makeup.Lexers.HTMLLexer,
     ".heex" => Makeup.Lexers.HEExLexer,
-    ".eex" => Makeup.Lexers.EExLexer,
-    ".json" => Makeup.Lexers.JsonLexer
+    ".eex" => Makeup.Lexers.EExLexer
   }
 
   def render(source, path) when is_binary(source) do
@@ -26,7 +26,7 @@ defmodule ConductorWeb.CodeHighlight do
   end
 
   def diff(source) when is_binary(source) do
-    highlight(source, {Makeup.Lexers.DiffLexer, []})
+    highlight(source, Makeup.Registry.get_lexer_by_name("diff"))
   end
 
   defp highlight(source, nil), do: Phoenix.HTML.html_escape(source)

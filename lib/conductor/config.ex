@@ -13,10 +13,7 @@ defmodule Conductor.Config do
 
   def list_repos, do: Repository |> Ash.Query.sort(:name) |> Ash.read!()
   def get_repo!(id), do: Ash.get!(Repository, id)
-
-  def create_repo(attrs), do: %Repository{} |> changeset(attrs) |> persist()
-  def update_repo(%Repository{} = repo, attrs), do: repo |> changeset(attrs) |> persist()
-  def delete_repo(%Repository{} = repo), do: destroy_record(repo)
+  def delete_repo(%Repository{} = repo), do: Ash.destroy(repo)
 
   ## Projects
 
@@ -29,13 +26,11 @@ defmodule Conductor.Config do
 
   def list_enabled_projects, do: Project |> Ash.Query.for_read(:enabled) |> Ash.read!()
   def get_project!(id), do: Ash.get!(Project, id, load: [:repo])
-
-  def create_project(attrs), do: %Project{} |> changeset(attrs) |> persist()
-  def update_project(%Project{} = project, attrs), do: project |> changeset(attrs) |> persist()
-  def delete_project(%Project{} = project), do: destroy_record(project)
+  def delete_project(%Project{} = project), do: Ash.destroy(project)
 
   ## Settings
 
+  @doc "The one settings row, created with its defaults on first use."
   def get_settings, do: read_settings() || create_settings()
 
   defp read_settings do
@@ -43,8 +38,7 @@ defmodule Conductor.Config do
   end
 
   defp create_settings do
-    # Serialize initialization without adding a singleton column or constraint
-    # to the existing table. Recheck after locking in case another caller won.
+    # Two first callers must not both create a row: the second one finds the first one's after the lock.
     {:ok, settings} =
       Conductor.Repo.transaction(fn ->
         Conductor.Repo.query!("LOCK TABLE settings IN SHARE ROW EXCLUSIVE MODE")
@@ -54,9 +48,6 @@ defmodule Conductor.Config do
     settings
   end
 
-  def update_settings(%Settings{} = settings, attrs),
-    do: settings |> changeset(attrs) |> persist()
-
   @doc "The model map a run starts with: every complexity role falls back to the head model."
   def run_models(%Settings{models: models}) do
     head = models["head"]
@@ -64,27 +55,5 @@ defmodule Conductor.Config do
     if head do
       for role <- Settings.roles(), into: %{}, do: {role, models[role] || head}
     end
-  end
-
-  defp changeset(%{id: nil} = record, attrs),
-    do:
-      record.__struct__
-      |> Ash.Changeset.new()
-      |> Map.put(:data, record)
-      |> Ash.Changeset.for_create(:create, attrs, skip_unknown_inputs: [:*])
-
-  defp changeset(record, attrs),
-    do: Ash.Changeset.for_update(record, :update, attrs, skip_unknown_inputs: [:*])
-
-  defp persist(changeset) do
-    case changeset.action_type do
-      :create -> Ash.create(changeset)
-      :update -> Ash.update(changeset)
-    end
-  end
-
-  defp destroy_record(record) do
-    changeset = Ash.Changeset.for_destroy(record, :destroy)
-    Ash.destroy(changeset, return_destroyed?: true)
   end
 end

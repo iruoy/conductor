@@ -11,20 +11,9 @@ defmodule Conductor.Runs.Event do
     table "run_events"
     repo Conductor.Repo
 
-    migration_types role: :string,
-                    entry: :string,
-                    kind: :string,
-                    run_id: :string,
-                    conversation: :integer,
-                    position: :integer
-
-    migration_defaults inserted_at: "nil"
-
     references do
       reference :run, on_delete: :delete
     end
-
-    identity_index_names run_id_conversation_entry: "run_events_run_id_conversation_entry_index"
   end
 
   actions do
@@ -61,7 +50,6 @@ defmodule Conductor.Runs.Event do
       constraints: [trim?: false, allow_empty?: true]
 
     attribute :payload, :map, allow_nil?: false, public?: true
-    create_timestamp :inserted_at, type: :utc_datetime
   end
 
   relationships do

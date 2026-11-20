@@ -19,7 +19,7 @@ defmodule Conductor.WorkspaceTest do
     )
   end
 
-  test "clones from a mirror onto a feature branch from staging", %{tmp_dir: dir} do
+  test "clones from a mirror onto a feature branch from staging, once", %{tmp_dir: dir} do
     remote = git_remote(dir)
 
     assert {:ok, %{path: path, branch: "feature/SHOP-1", base: "staging", setup_output: nil}} =
@@ -30,14 +30,9 @@ defmodule Conductor.WorkspaceTest do
     assert File.exists?(Path.join(path, "STAGING.md"))
     assert git!(path, ["rev-parse", "--abbrev-ref", "HEAD"]) == "feature/SHOP-1"
     assert git!(path, ["remote", "get-url", "origin"]) == remote
-  end
 
-  test "is idempotent and keeps work in progress", %{tmp_dir: dir} do
-    remote = git_remote(dir)
-    {:ok, %{path: path}} = Workspace.provision(repo(remote), "SHOP-2", %{})
     File.write!(Path.join(path, "wip.txt"), "unsaved")
-
-    assert {:ok, %{path: ^path}} = Workspace.provision(repo(remote), "SHOP-2", %{})
+    assert {:ok, %{path: ^path}} = Workspace.provision(repo(remote), "SHOP-1", %{})
     assert File.read!(Path.join(path, "wip.txt")) == "unsaved"
   end
 
@@ -113,17 +108,6 @@ defmodule Conductor.WorkspaceTest do
     assert status != 0
   end
 
-  defp with_path(path, fun) do
-    previous = System.fetch_env!("PATH")
-    System.put_env("PATH", path)
-
-    try do
-      fun.()
-    after
-      System.put_env("PATH", previous)
-    end
-  end
-
   test "runs the setup script once and reports failures", %{tmp_dir: dir} do
     remote = git_remote(dir)
     ok = repo(remote, %{setup_script: "echo installing; touch .installed"})
@@ -138,5 +122,16 @@ defmodule Conductor.WorkspaceTest do
 
     assert {:error, "setup script exited with 3:\nbroken\n"} =
              Workspace.provision(failing, "SHOP-6", %{})
+  end
+
+  defp with_path(path, fun) do
+    previous = System.fetch_env!("PATH")
+    System.put_env("PATH", path)
+
+    try do
+      fun.()
+    after
+      System.put_env("PATH", previous)
+    end
   end
 end

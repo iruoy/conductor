@@ -507,7 +507,7 @@ defmodule ConductorWeb.ConfigLive do
 
   def handle_event("delete_repo", %{"id" => id}, socket) do
     case Config.delete_repo(Config.get_repo!(id)) do
-      {:ok, _} -> {:noreply, load_lists(socket)}
+      :ok -> {:noreply, load_lists(socket)}
       {:error, _} -> {:noreply, put_flash(socket, :error, "This repository is used by a project")}
     end
   end
@@ -554,7 +554,7 @@ defmodule ConductorWeb.ConfigLive do
 
   def handle_event("delete_project", %{"id" => id}, socket) do
     case Config.delete_project(Config.get_project!(id)) do
-      {:ok, _} ->
+      :ok ->
         {:noreply, load_lists(socket)}
 
       {:error, _} ->

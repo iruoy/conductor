@@ -9,32 +9,10 @@ import lockfile from "proper-lockfile";
 
 const STALE_MS = 30_000;
 
-export function defaultAuthPath(): string {
-	return process.env.PI_AUTH_PATH ?? join(homedir(), ".pi", "agent", "auth.json");
-}
-
 type AuthFile = Record<string, Credential>;
 
 export class FileCredentialStore implements CredentialStore {
-	readonly path: string;
-
-	constructor(path: string = defaultAuthPath()) {
-		this.path = path;
-	}
-
-	/** Read known secrets for inspection without locking, writing, or refreshing credentials. */
-	redactionValues(): readonly string[] {
-		const values: string[] = [];
-		for (const credential of Object.values(this.load())) {
-			if (credential.type === "api_key") {
-				if (typeof credential.key === "string") values.push(credential.key);
-			} else if (credential.type === "oauth") {
-				if (typeof credential.access === "string") values.push(credential.access);
-				if (typeof credential.refresh === "string") values.push(credential.refresh);
-			}
-		}
-		return values;
-	}
+	private readonly path = process.env.PI_AUTH_PATH ?? join(homedir(), ".pi", "agent", "auth.json");
 
 	async read(providerId: string, _options?: AuthOperationOptions): Promise<Credential | undefined> {
 		return this.load()[providerId];

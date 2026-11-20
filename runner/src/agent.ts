@@ -1,10 +1,9 @@
 // The `conductor` extension the head conversation of every run selects: subagents per subtask, questions to a human,
 // and moving GitHub issues through the project's statuses. Subagents select `conductor-subagent` instead, which
 // brings their prompt and the status tool, so the head may leave a subtask's status to its subagent.
-import { Type } from "./schemas.ts";
-import type { Context } from "@earendil-works/chord";
-import { type AssistantMessage } from "@earendil-works/pi-ai";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { arr, int, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
+import type { Context } from "@earendil-works/chord/context";
+import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	AssistantEntry,
 	type ConversationId,
@@ -17,9 +16,9 @@ import {
 	type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import { type Complexity, findRunByConversation, type GithubRun, type ModelChoice, RunsDoc } from "./state.ts";
+import { type Complexity, findRunByConversation, type GithubRun, HumanAnswer, type ModelChoice, RunsDoc } from "./state.ts";
 
-export type AgentHooks = {
+type AgentHooks = {
 	question(runId: string, qid: string, text: string): void;
 	/** A subagent conversation was created or found again, so the host can stream it. */
 	child(runId: string, key: string, conversationId: number): void;
@@ -27,8 +26,8 @@ export type AgentHooks = {
 
 export type GithubConfig = { baseUrl: string; token: string };
 
-export function githubFromEnv(env: NodeJS.ProcessEnv = process.env): GithubConfig | undefined {
-	const { GITHUB_TOKEN } = env;
+export function githubFromEnv(): GithubConfig | undefined {
+	const { GITHUB_TOKEN } = process.env;
 	if (!GITHUB_TOKEN) return undefined;
 	return { baseUrl: "https://api.github.com", token: GITHUB_TOKEN };
 }
@@ -56,18 +55,12 @@ decision you cannot make yourself, stop and answer with a line starting \`NEEDS_
 Otherwise finish with a short summary of what you changed and how you verified it.
 Use codemode to batch related tool calls. Discover optional GitHub issue status tools with tool_search.`;
 
-export type ConductorExtensions = { head: Extension; subagent: Extension };
-
-const SubtaskSchema = Type.Object({
-	key: Type.String({ description: "Key of the subtask, e.g. #124" }),
-	title: Type.String(),
-	complexity: Type.Optional(
-		Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")], {
-			description: "Picks the model; defaults to high",
-		}),
-	),
-	instructions: Type.String({ description: "Everything the subagent needs: it cannot see this conversation" }),
-	dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Keys of subtasks that must finish first" })),
+const SubtaskSchema = obj({
+	key: str({ description: "Key of the subtask, e.g. #124" }),
+	title: str(),
+	complexity: opt(oneOf(["low", "medium", "high"], { description: "Picks the model; defaults to high" })),
+	instructions: str({ description: "Everything the subagent needs: it cannot see this conversation" }),
+	dependsOn: opt(arr(str(), { description: "Keys of subtasks that must finish first" })),
 });
 
 type Subtask = { key: string; title: string; complexity?: Complexity; instructions: string; dependsOn?: string[] };
@@ -92,9 +85,9 @@ export function waves(tasks: readonly Subtask[]): Subtask[][] {
 
 export function createConductorExtensions(
 	hooks: AgentHooks,
-	github: GithubConfig | undefined = githubFromEnv(),
-	executionExtensions: readonly Extension[] = [],
-): ConductorExtensions {
+	github: GithubConfig | undefined,
+	executionExtensions: readonly Extension[],
+): { head: Extension; subagent: Extension } {
 	const runIdOf = async (api: ToolExecutionApi, context: Context): Promise<string> => {
 		const state = await api.snapshot(RunsDoc, context);
 		const runId = state ? findRunByConversation(state, api.conversationId as number) : undefined;
@@ -144,7 +137,7 @@ export function createConductorExtensions(
 			"unfinished dependencies run in parallel; dependents start once their dependencies are done and are skipped " +
 			"when one did not finish. Returns each subagent's final answer. A subagent that needs a decision answers " +
 			"with NEEDS_INPUT: decide yourself or ask a human, then run that subtask again with the answer included.",
-		parameters: Type.Object({ tasks: Type.Array(SubtaskSchema, { minItems: 1 }) }),
+		parameters: obj({ tasks: arr(SubtaskSchema, { minItems: 1 }) }),
 		// A rerun after a crash finds the children and submissions it already made.
 		replay: "safe",
 		execute: async (args, api, context) => {
@@ -180,22 +173,24 @@ export function createConductorExtensions(
 	const askHuman = defineTool({
 		name: "ask_human",
 		description:
-			"Ask a human a question you cannot answer from the issue or the code. Your turn ends; the answer arrives as " +
-			"your next message, possibly much later.",
-		parameters: Type.Object({ question: Type.String() }),
+			"Ask a human a question you cannot answer from the issue or the code. The answer is this tool's result; it " +
+			"may take hours, and the run waits for it.",
+		parameters: obj({ question: str() }),
 		replay: "safe",
+		// The call parks until the human's answer arrives as a signal, holding no process meanwhile; it then runs
+		// again and returns the answer.
 		execute: async (args, api, context) => {
-			const runId = await runIdOf(api, context);
 			const qid = `q${api.taskId}`;
+			const answer = await api.readSignal(HumanAnswer, qid, context);
+			if (answer !== undefined && "value" in answer) return { output: [{ type: "text", text: answer.value.text }] };
+			const runId = await runIdOf(api, context);
 			await api.commit(async (tx) => {
 				const run = (await tx.doc(RunsDoc)).runs[runId]!;
-				run.questions[qid] ??= { text: args.question, answered: false };
+				run.questions[qid] ??= { text: args.question, answered: false, taskId: api.taskId as number };
+				run.status = "waiting_for_input";
 			}, context);
 			hooks.question(runId, qid, args.question);
-			return {
-				output: [{ type: "text", text: "The question was sent. Stop now; the answer will arrive as your next message." }],
-				control: { terminate: true },
-			};
+			return { sleep: { signals: [HumanAnswer.key(qid)] } };
 		},
 	});
 
@@ -205,9 +200,9 @@ export function createConductorExtensions(
 		description:
 			"Move the issue of this run or one of its subtasks to the project status with this name. Moving a subtask to " +
 			"the done status also closes its issue. Does nothing when it is already there.",
-		parameters: Type.Object({
-			number: Type.Integer({ description: "Issue number, without the #" }),
-			status: Type.String({ description: "e.g. In progress, Done" }),
+		parameters: obj({
+			number: int({ description: "Issue number, without the #" }),
+			status: str({ description: "e.g. In progress, Done" }),
 		}),
 		replay: "safe",
 		execute: async (args, api, context) => {

@@ -17,10 +17,11 @@ defmodule ConductorWeb.RunLive do
        page_title: run.id,
        run: run,
        conversations: conversations,
-       retryable?: Runs.retryable?(run)
+       retryable?: Runs.retryable?(run),
+       continuable?: Runs.continuable?(run)
      )
      |> assign(attempts: Runs.other_attempts(run), history: Runs.status_history(id))
-     |> assign(inbox: [], sent: %{}, models: Runs.conversation_models(id))
+     |> assign(inbox: [], sent: %{}, lives: %{}, models: Runs.conversation_models(id))
      |> assign(
        ends: Runs.conversation_ends(id),
        compaction_failures: Runs.compaction_failures(id)
@@ -109,7 +110,7 @@ defmodule ConductorWeb.RunLive do
             />
 
             <div
-              :if={@live_thinking != "" or @live_text != "" or @live_tools != %{}}
+              :if={@live_thinking != "" or @live_text != "" or @live_tools != []}
               id="live"
               class="space-y-3"
             >
@@ -117,13 +118,13 @@ defmodule ConductorWeb.RunLive do
                 :if={@live_thinking != ""}
                 id="live-thinking"
                 text={@live_thinking}
-                streaming={@live_text == "" and @live_tools == %{}}
+                streaming={@live_text == "" and @live_tools == []}
               />
               <.chat_message :if={@live_text != ""} from="agent" text={@live_text} />
               <.tool
-                :for={{call_id, tool} <- @live_tools}
+                :for={tool <- @live_tools}
                 :if={tool.output != ""}
-                id={"live-tool-#{call_id}"}
+                id={"live-tool-#{tool.id}"}
                 name={tool.name}
                 args={tool.args}
                 output={tool.output}
@@ -136,7 +137,7 @@ defmodule ConductorWeb.RunLive do
               :if={
                 @busy and @tail == nil and @run.status == :running and @live_thinking == "" and
                   @live_text == "" and
-                  @live_tools == %{}
+                  @live_tools == []
               }
               id="indicator"
               class="text-base-content/40"
@@ -156,7 +157,10 @@ defmodule ConductorWeb.RunLive do
         <%!-- The oldest open question is answered here. Without one, what is typed goes to the head agent while it
         works; it waits in the agent's inbox until the tools that are running are done. --%>
         <div
-          :if={@open_questions != [] or @run.status == :completed or not Run.terminal?(@run)}
+          :if={
+            @open_questions != [] or @run.status == :completed or @continuable? or
+              not Run.terminal?(@run)
+          }
           id="prompt-bar"
           class={[
             "shrink-0 border-t border-base-300 px-3 py-2",
@@ -207,6 +211,18 @@ defmodule ConductorWeb.RunLive do
                 <input type="hidden" name="qid" value={q.qid} />
               </.chat_prompt>
             <% [] -> %>
+              <%!-- A failed run goes on in the same conversation; Retry starts a new attempt instead. --%>
+              <.chat_prompt
+                :if={@continuable?}
+                id="continue"
+                phx-submit="message"
+                label="Tell the agent how to go on"
+                placeholder="What to do differently, or leave empty to pick up where it stopped"
+                submit="Continue"
+                hint="Continues this conversation in the same workspace. Retry starts over in a new attempt."
+                optional
+                accent
+              />
               <.chat_prompt
                 :if={@run.status == :completed or not Run.terminal?(@run)}
                 id="prompt"
@@ -384,7 +400,12 @@ defmodule ConductorWeb.RunLive do
             · {@model["reasoning"]}
           </span>
           <span :if={!@model} class="text-fg-secondary">
-            {if @head or Run.terminal?(@run), do: "Not recorded", else: "Not known yet"}
+            <%!-- The head's model is chosen when the run is provisioned; a subagent's shows once it answers. --%>
+            {cond do
+              not @head -> "Not known yet"
+              Run.terminal?(@run) -> "None: the run ended before it started"
+              true -> "Not chosen yet"
+            end}
           </span>
         </dd>
 
@@ -485,7 +506,7 @@ defmodule ConductorWeb.RunLive do
 
   attr :history, :list, required: true
 
-  # The statuses the run has had, the first first. A run from before they were kept has none, and no timeline.
+  # The statuses the run has had, the first first.
   defp timeline(assigns) do
     ~H"""
     <div class="h-px bg-muted"></div>
@@ -584,12 +605,14 @@ defmodule ConductorWeb.RunLive do
   end
 
   def handle_event("message", %{"text" => text}, socket) do
+    form = if socket.assigns.run.status == :failed, do: "continue", else: "prompt"
+
     case Coordinator.message(socket.assigns.run.id, String.trim(text)) do
       {:ok, id} ->
         {:noreply,
          socket
          |> assign(sent: Map.put(socket.assigns.sent, id, String.trim(text)))
-         |> push_event("prompt:sent", %{id: "prompt"})}
+         |> push_event("prompt:sent", %{id: form})}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, message_error(reason))}
@@ -626,7 +649,11 @@ defmodule ConductorWeb.RunLive do
     if Map.get(other, :issue_key) == run.issue_key,
       do:
         {:noreply,
-         assign(socket, attempts: Runs.other_attempts(run), retryable?: Runs.retryable?(run))},
+         assign(socket,
+           attempts: Runs.other_attempts(run),
+           retryable?: Runs.retryable?(run),
+           continuable?: Runs.continuable?(run)
+         )},
       else: {:noreply, socket}
   end
 
@@ -638,7 +665,8 @@ defmodule ConductorWeb.RunLive do
      assign(socket,
        run: run,
        history: Runs.status_history(run.id),
-       retryable?: Runs.retryable?(run)
+       retryable?: Runs.retryable?(run),
+       continuable?: Runs.continuable?(run)
      )}
   end
 
@@ -647,6 +675,7 @@ defmodule ConductorWeb.RunLive do
   def handle_info({:agent_event, %{conversation: conversation, role: role, event: event}}, socket) do
     # Messages go to the head agent, whichever conversation is on show.
     socket = if role == "head", do: track_inbox(socket, event), else: socket
+    socket = track_live(socket, conversation, event)
 
     socket =
       socket
@@ -673,8 +702,9 @@ defmodule ConductorWeb.RunLive do
   defp track_compaction(socket, conversation, %{"type" => "snapshot"} = event),
     do: put_compaction(socket, conversation, event["compactionFailure"])
 
-  defp track_compaction(socket, conversation, %{"type" => "compaction_status"} = event),
-    do: put_compaction(socket, conversation, event["failure"])
+  defp track_compaction(socket, conversation, %{"type" => "update"} = event)
+       when is_map_key(event, "compactionFailure"),
+       do: put_compaction(socket, conversation, event["compactionFailure"])
 
   defp track_compaction(socket, _conversation, _event), do: socket
 
@@ -692,53 +722,56 @@ defmodule ConductorWeb.RunLive do
   end
 
   # What waits in the head agent's inbox: the messages it has not read yet.
-  defp track_inbox(socket, %{"type" => type} = event) when type in ~w(inbox_update snapshot) do
-    case event["items"] || event["inbox"] do
-      items when is_list(items) ->
-        assign(socket, inbox: Enum.reject(items, &(&1["mode"] == "write")))
-
-      _ ->
-        socket
-    end
-  end
+  defp track_inbox(socket, %{"live" => %{"inbox" => items}}) when is_list(items),
+    do: assign(socket, inbox: Enum.reject(items, &(&1["mode"] == "write")))
 
   defp track_inbox(socket, _event), do: socket
+
+  # The newest live state of each conversation, so the one put on show is shown as it is.
+  defp track_live(socket, conversation, %{"live" => %{} = live}),
+    do: assign(socket, lives: Map.put(socket.assigns.lives, conversation, live))
+
+  defp track_live(socket, _conversation, _event), do: socket
 
   # The model of a conversation is the one its first answer names; a snapshot may bring answers this page missed.
   defp track_model(%{assigns: %{models: models}} = socket, conversation, _event)
        when is_map_key(models, conversation),
        do: socket
 
-  defp track_model(socket, conversation, %{
-         "type" => "message_end",
-         "entry" => %{"kind" => "pi.assistant", "model" => [message | _]}
-       }) do
-    case Runs.entry_model(message) do
-      nil -> socket
-      model -> assign(socket, models: Map.put(socket.assigns.models, conversation, model))
-    end
-  end
-
   defp track_model(socket, _conversation, %{"type" => "snapshot"}),
     do: assign(socket, models: Runs.conversation_models(socket.assigns.run.id))
+
+  defp track_model(socket, conversation, %{"type" => "update", "entries" => entries}) do
+    model =
+      Enum.find_value(entries, fn
+        %{"kind" => "pi.assistant", "model" => [message | _]} -> Runs.entry_model(message)
+        _ -> nil
+      end)
+
+    if model,
+      do: assign(socket, models: Map.put(socket.assigns.models, conversation, model)),
+      else: socket
+  end
 
   defp track_model(socket, _conversation, _event), do: socket
 
   # How a conversation last left off, from the events that say so; a snapshot may bring entries this page missed.
-  defp track_end(socket, conversation, %{
-         "type" => "message_end",
-         "entry" => %{"kind" => kind} = entry
-       }) do
-    message = List.first(List.wrap(entry["model"])) || %{}
-    put_end(socket, conversation, kind, message["stopReason"])
-  end
-
-  defp track_end(socket, conversation, %{"type" => type})
-       when type in ~w(message_start tool_execution_start),
-       do: put_end(socket, conversation, "tool_start", nil)
-
   defp track_end(socket, _conversation, %{"type" => "snapshot"}),
     do: assign(socket, ends: Runs.conversation_ends(socket.assigns.run.id))
+
+  # While a run is under way the conversation is at work, whatever its last entry says.
+  defp track_end(socket, conversation, %{"type" => "update"} = event) do
+    socket =
+      Enum.reduce(event["entries"] || [], socket, fn %{"kind" => kind} = entry, socket ->
+        message = List.first(List.wrap(entry["model"])) || %{}
+        put_end(socket, conversation, kind, message["stopReason"])
+      end)
+
+    case event["live"] do
+      %{"busy" => true} -> put_end(socket, conversation, "pi.user", nil)
+      _ -> socket
+    end
+  end
 
   defp track_end(socket, _conversation, _event), do: socket
 
@@ -750,63 +783,21 @@ defmodule ConductorWeb.RunLive do
         ends: Map.put(socket.assigns.ends, conversation, Runs.conversation_end(kind, stop))
       )
 
-  # A snapshot follows a runner restart; the database already holds it, so reload from there.
+  # A snapshot follows an attach; the database already holds its entries, so reload from there.
   defp apply_event(socket, conversation, %{"type" => "snapshot"} = event) do
-    nested =
-      for tool <- event["nestedTools"] || [],
-          tool["status"] == "running",
-          into: %{},
-          do:
-            {tool["callId"],
-             %{
-               name: tool["name"],
-               args: tool["arguments"] || %{},
-               output: tail(tool["output"] || "")
-             }}
-
-    socket |> select(conversation) |> assign(live_tools: nested)
+    socket |> select(conversation) |> put_live(event["live"])
   end
 
-  defp apply_event(socket, _conversation, %{
-         "type" => "message_start",
-         "message" => %{"role" => "assistant"}
-       }) do
-    assign(socket, live_text: "", live_thinking: "", busy: true)
+  # Entries come before the live state they go with: an answer is in the transcript before its stream goes away.
+  defp apply_event(socket, conversation, %{"type" => "update"} = event) do
+    socket = Enum.reduce(event["entries"] || [], socket, &apply_entry(&2, conversation, &1))
+    if event["live"], do: put_live(socket, event["live"]), else: socket
   end
 
-  defp apply_event(socket, _conversation, %{"type" => "message_update", "changes" => changes}) do
-    {text, thinking} =
-      Enum.reduce(changes, {socket.assigns.live_text, socket.assigns.live_thinking}, fn
-        %{"type" => "text_delta", "delta" => delta}, {text, thinking} ->
-          {text <> delta, thinking}
+  defp apply_event(socket, _conversation, _event), do: socket
 
-        %{"type" => "text_start", "block" => %{"text" => start}}, {text, thinking}
-        when is_binary(start) ->
-          {text <> start, thinking}
-
-        %{"type" => "thinking_delta", "delta" => delta}, {text, thinking} ->
-          {text, thinking <> delta}
-
-        %{"type" => "thinking_start", "block" => %{"thinking" => start}}, {text, thinking}
-        when is_binary(start) ->
-          {text, thinking <> start}
-
-        _, acc ->
-          acc
-      end)
-
-    assign(socket, live_text: text, live_thinking: thinking, busy: true)
-  end
-
-  defp apply_event(socket, conversation, %{
-         "type" => "message_end",
-         "entry" => %{"kind" => kind} = entry
-       }) do
-    socket =
-      if kind == "pi.assistant",
-        do: assign(socket, live_text: "", live_thinking: ""),
-        else: socket
-
+  # Only messages are shown as they come; other entries are stored and show once the transcript is read again.
+  defp apply_entry(socket, conversation, %{"kind" => kind, "model" => [_ | _]} = entry) do
     item = item(conversation, entry)
 
     calling =
@@ -828,43 +819,34 @@ defmodule ConductorWeb.RunLive do
     end
   end
 
-  defp apply_event(socket, _conversation, %{"type" => "tool_execution_start"} = event) do
-    tool = %{name: event["toolName"], args: event["args"], output: ""}
-    assign(socket, live_tools: Map.put(socket.assigns.live_tools, event["toolCallId"], tool))
-  end
+  defp apply_entry(socket, _conversation, _entry), do: socket
 
-  defp apply_event(
-         socket,
-         _conversation,
-         %{"type" => "tool_execution_update", "toolCallId" => id} = event
-       ) do
-    case {socket.assigns.live_tools[id], event["output"]} do
-      {tool, output} when tool != nil and is_map(output) ->
-        tool = %{tool | output: apply_output(tool.output, output)}
-        assign(socket, live_tools: Map.put(socket.assigns.live_tools, id, tool))
+  # The live state as the runner sent it: the answer being streamed and the tools running now.
+  defp put_live(socket, %{} = live) do
+    message = live["message"] || %{}
 
-      _ ->
-        socket
-    end
-  end
-
-  defp apply_event(socket, _conversation, %{"type" => "tool_execution_end", "toolCallId" => id}) do
-    assign(socket, live_tools: Map.delete(socket.assigns.live_tools, id))
-  end
-
-  defp apply_event(socket, _conversation, _event), do: socket
-
-  defp apply_output(_current, %{"set" => text}), do: tail(text)
-
-  defp apply_output(current, output) do
-    trimmed =
-      case output["trimStart"] do
-        n when is_integer(n) and n > 0 -> String.slice(current, n..-1//1)
-        _ -> current
+    tools =
+      for tool <- live["tools"] || [] do
+        %{
+          id: tool["callId"],
+          name: tool["name"],
+          args: tool["args"] || %{},
+          output: tail(tool["output"] || "")
+        }
       end
 
-    tail(trimmed <> (output["append"] || ""))
+    socket =
+      assign(socket,
+        live_text: message["text"] || "",
+        live_thinking: message["thinking"] || "",
+        live_tools: tools
+      )
+
+    if live["message"] || tools != [], do: assign(socket, busy: true), else: socket
   end
+
+  defp put_live(socket, _live),
+    do: assign(socket, live_text: "", live_thinking: "", live_tools: [])
 
   defp tail(text) when byte_size(text) > @tool_output_max,
     do: String.slice(text, -@tool_output_max, @tool_output_max)
@@ -874,10 +856,7 @@ defmodule ConductorWeb.RunLive do
   defp select(socket, conversation) do
     items =
       if conversation,
-        do:
-          socket.assigns.run.id
-          |> Runs.list_events(conversation)
-          |> Enum.reject(&(&1.kind == "tool_start")),
+        do: Runs.list_events(socket.assigns.run.id, conversation),
         else: []
 
     items = Enum.map(items, &item/1)
@@ -913,10 +892,11 @@ defmodule ConductorWeb.RunLive do
     tail = Enum.find_value(parts, &(&1[:active] && &1.id))
 
     socket
-    |> assign(selected: conversation, live_text: "", live_thinking: "", live_tools: %{})
+    |> assign(selected: conversation)
     |> assign(busy: busy, groups: groups, tail: tail, turn: turn)
     |> assign(first_prompt: Enum.find_value(items, &(&1.kind == "pi.user" && &1.id)))
     |> stream(:items, parts, reset: true)
+    |> put_live(socket.assigns[:lives][conversation])
   end
 
   # `groups` keeps the groups of steps that can still change: those waiting for a tool result, to put it on its
@@ -1102,11 +1082,11 @@ defmodule ConductorWeb.RunLive do
     |> Enum.join(" · ")
   end
 
-  # The model the conversation on show ran on: what the run was started with for the head agent (what its answers
-  # name for a run from before that was kept), and what its answers name for a subagent.
+  # The model the conversation on show ran on: what the run was started with for the head agent, and what its
+  # answers name for a subagent.
   defp model(run, conversations, selected, models) do
     if head?(conversations, selected),
-      do: (run.models || %{})["head"] || models[selected],
+      do: (run.models || %{})["head"],
       else: models[selected]
   end
 
@@ -1142,6 +1122,11 @@ defmodule ConductorWeb.RunLive do
     do: "The original workspace is unavailable; this run cannot be resumed."
 
   defp message_error(:empty_message), do: "Enter a message first."
+
+  defp message_error(:not_continuable),
+    do: "This run cannot go on: a later attempt exists, or it failed before the agent started."
+
+  defp message_error(reason) when is_binary(reason), do: reason
   defp message_error(reason), do: "Could not send the message: #{inspect(reason)}"
 
   defp prompt_placeholder(:completed, _head?), do: "Send review feedback to the agent"

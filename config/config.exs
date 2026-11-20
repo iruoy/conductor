@@ -58,7 +58,8 @@ config :spark,
 
 config :conductor, Conductor.Runner,
   executable: "node",
-  args: [Path.expand("../runner/dist/main.js", __DIR__)],
+  # Node runs the TypeScript sources itself (type stripping); `pnpm typecheck` checks them.
+  args: [Path.expand("../runner/src/main.ts", __DIR__)],
   cd: Path.expand("../runner", __DIR__)
 
 config :conductor, Conductor.Poller, interval: 60_000
@@ -68,30 +69,25 @@ config :conductor, ConductorWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: ConductorWeb.ErrorHTML, json: ConductorWeb.ErrorJSON],
+    formats: [html: ConductorWeb.ErrorHTML],
     layout: false
   ],
   pubsub_server: Conductor.PubSub,
   live_view: [signing_salt: "TSV6iDde"]
-
-# Configure LiveView
-config :phoenix_live_view,
-  # the attribute set on all root tags. Used for Phoenix.LiveView.ColocatedCSS.
-  root_tag_attribute: "phx-r"
 
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.28.2",
   conductor: [
     args:
-      ~w(js/app.js --bundle --target=es2025 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
+      ~w(js/app.js --bundle --target=es2025 --outdir=../priv/static/assets/js --external:/fonts/* --alias:@=.),
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
 # Configure tailwind (the version is required)
 config :tailwind,
-  version: "4.3.3",
+  version: "4.3.5",
   conductor: [
     args: ~w(
       --input=assets/css/app.css
@@ -106,9 +102,9 @@ config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
-# Use Jason for JSON parsing in Phoenix
-config :phoenix, :json_library, Jason
+config :phoenix, :json_library, JSON
 
-# Import environment specific config. This must remain at the bottom
-# of this file so it overrides the configuration defined above.
+# syntect highlights every language without a native Makeup lexer (see ConductorWeb.CodeHighlight), Erlang included.
+config :makeup_syntect, excluded_languages: ["elixir", "html_eex"]
+
 import_config "#{config_env()}.exs"

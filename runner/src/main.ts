@@ -24,14 +24,13 @@ const credentials = new FileCredentialStore();
 const runner = await Runner.open({
 	storage: await openNodeSqliteStorage(join(dataDir, "durable.sqlite")),
 	models: builtinModels({ credentials }),
-	inspectionSecrets: () => credentials.redactionValues(),
 	emit: write,
 });
 
 // A failed Pi Session has already closed its storage. Exit nonzero so Phoenix restarts and reconciles it;
 // normal stdin shutdown still closes cleanly below. Never attempt writes to the failed Session.
 void runner.sessionEnd.then((end) => {
-	if (end.reason === "failed") process.exit(1);
+	if (end.kind === "failed") process.exit(1);
 });
 
 const input = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });

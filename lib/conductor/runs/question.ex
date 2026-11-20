@@ -8,14 +8,10 @@ defmodule Conductor.Runs.Question do
   postgres do
     table "questions"
     repo Conductor.Repo
-    migration_types qid: :string, run_id: :string
-    migration_defaults inserted_at: "nil", updated_at: "nil"
 
     references do
       reference :run, on_delete: :delete
     end
-
-    identity_index_names run_id_qid: "questions_run_id_qid_index"
   end
 
   actions do
@@ -46,7 +42,6 @@ defmodule Conductor.Runs.Question do
     attribute :answer, :string, public?: true, constraints: [trim?: false, allow_empty?: true]
     attribute :answered_at, :utc_datetime, public?: true
     create_timestamp :inserted_at, type: :utc_datetime
-    update_timestamp :updated_at, type: :utc_datetime
   end
 
   relationships do

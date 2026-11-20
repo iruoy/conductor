@@ -15,7 +15,7 @@ defmodule Conductor.Runner do
   @forward ~w(ready run_state run_settled)
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc "Sends a command (a map with a `type`) and returns `{:ok, result}` or `{:error, reason}`."
@@ -24,9 +24,6 @@ defmodule Conductor.Runner do
   catch
     :exit, {reason, _} -> {:error, {:runner_unavailable, reason}}
   end
-
-  @doc "The OS pid of the runner process."
-  def os_pid, do: GenServer.call(__MODULE__, :os_pid)
 
   @impl true
   def init(opts) do
@@ -65,14 +62,10 @@ defmodule Conductor.Runner do
       command
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
       |> Map.put("id", id)
-      |> Jason.encode!()
+      |> JSON.encode!()
 
     Port.command(state.port, [line, ?\n])
     {:noreply, %{state | pending: Map.put(state.pending, id, from), next_id: id + 1}}
-  end
-
-  def handle_call(:os_pid, _from, state) do
-    {:reply, Port.info(state.port, :os_pid) |> elem(1), state}
   end
 
   @impl true
@@ -84,7 +77,7 @@ defmodule Conductor.Runner do
     line = IO.iodata_to_binary([state.buffer | part])
     state = %{state | buffer: []}
 
-    case Jason.decode(line) do
+    case JSON.decode(line) do
       {:ok, message} ->
         {:noreply, handle_message(message, state)}
 

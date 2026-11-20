@@ -14,7 +14,7 @@ defmodule Conductor.Fixtures do
         slug: "shop",
         test_command: "mix test"
       })
-      |> Config.create_repo()
+      |> then(&Ash.create(Conductor.Config.Repository, &1))
 
     repo
   end
@@ -34,7 +34,7 @@ defmodule Conductor.Fixtures do
         handoff_status: "Review",
         repo_id: repo.id
       })
-      |> Config.create_project()
+      |> then(&Ash.create(Conductor.Config.Project, &1))
 
     Ash.load!(project, :repo)
   end
@@ -46,7 +46,7 @@ defmodule Conductor.Fixtures do
         max_concurrent: 3
       })
 
-    {:ok, settings} = Config.update_settings(Config.get_settings(), attrs)
+    {:ok, settings} = Ash.update(Config.get_settings(), attrs)
     settings
   end
 

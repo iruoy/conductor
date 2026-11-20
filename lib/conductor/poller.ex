@@ -11,7 +11,7 @@ defmodule Conductor.Poller do
   @pubsub Conductor.PubSub
   @topic "poller"
 
-  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
   @doc "Polls now instead of at the next tick."
   def poll_now, do: GenServer.cast(__MODULE__, :poll_now)
@@ -30,9 +30,8 @@ defmodule Conductor.Poller do
   end
 
   @impl true
-  def init(opts) do
-    config = Keyword.merge(Application.get_env(:conductor, __MODULE__, []), opts)
-    interval = Keyword.get(config, :interval, 60_000)
+  def init(nil) do
+    interval = Application.get_env(:conductor, __MODULE__, []) |> Keyword.get(:interval, 60_000)
 
     if interval do
       Process.send_after(self(), :poll, 1_000)

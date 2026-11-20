@@ -1,19 +1,11 @@
-# A stand-in for runner/dist/main.js that speaks the same JSON-lines protocol, for ExUnit.
+# A stand-in for runner/src/main.ts that speaks the same JSON-lines protocol, for ExUnit.
 #
 # The prompt steers a run: `[fake:hang]` keeps it running, `[fake:ask]` asks a question first, `[fake:fail]` fails it,
 # anything else completes it right away. Test-only commands: `fake_settle {run_id, outcome}` settles a run, `crash`
 # exits with status 1. With FAKE_RUNNER_STATE set, the state survives restarts in that file, like the real runner.
 defmodule FakeRunner do
   def main do
-    state = load()
-
-    emit(%{
-      type: "ready",
-      version: "fake",
-      resumed: for({id, %{"status" => "running"}} <- state, do: id)
-    })
-
-    loop(state)
+    loop(load())
   end
 
   defp loop(state) do
@@ -28,33 +20,6 @@ defmodule FakeRunner do
         loop(state)
     end
   end
-
-  defp handle(%{"type" => "inspect_context"} = c, state) do
-    if c["entry"] == 999 do
-      error(c, "Unavailable", state)
-    else
-      text =
-        if c["offset"] == 0,
-          do: "<script>alert('unsafe')</script> reconstructed #{c["conversation"]}:#{c["entry"]}",
-          else: "second page"
-
-      ok(
-        c,
-        %{
-          conversation: c["conversation"],
-          entry: c["entry"],
-          text: text,
-          offset: c["offset"],
-          total: 16011,
-          next_offset: if(c["offset"] == 0, do: 16000, else: nil),
-          head: nil
-        },
-        state
-      )
-    end
-  end
-
-  defp handle(%{"type" => "hello"} = c, state), do: ok(c, %{version: "fake", resumed: []}, state)
 
   defp handle(%{"type" => "models"} = c, state) do
     ok(
@@ -88,11 +53,12 @@ defmodule FakeRunner do
         state = Map.put(state, id, run)
         reply(c, %{conversation_id: 1, status: "running"})
         emit(%{type: "run_state", run_id: id, status: "running"})
-        agent(id, %{type: "snapshot", entries: []})
+        agent(id, %{type: "snapshot", entries: [], live: live(), compactionFailure: nil})
 
         agent(id, %{
-          type: "message_end",
-          entry: %{id: 1, kind: "pi.user", model: [%{role: "user", content: prompt}]}
+          type: "update",
+          entries: [%{id: 1, kind: "pi.user", model: [%{role: "user", content: prompt}]}],
+          live: live(busy: true)
         })
 
         {:ok, script(id, prompt, state)}
@@ -127,7 +93,7 @@ defmodule FakeRunner do
     case state[id] do
       %{"status" => "running"} ->
         reply(c, %{submission_id: 3})
-        agent(id, %{type: "inbox_update", items: [%{id: 3, mode: "steer"}]})
+        agent(id, %{type: "update", live: live(busy: true, inbox: [%{id: 3, mode: "steer"}])})
         {:ok, state}
 
       _ ->
@@ -142,14 +108,15 @@ defmodule FakeRunner do
         reply(c, %{submission_id: 4, conversation_id: 1})
 
         agent(id, %{
-          type: "message_end",
-          entry: %{id: 4, kind: "pi.user", model: [%{role: "user", content: c["text"]}]}
+          type: "update",
+          entries: [%{id: 4, kind: "pi.user", model: [%{role: "user", content: c["text"]}]}],
+          live: live(busy: true)
         })
 
         {:ok, state}
 
       _ ->
-        error(c, "run #{id} is not ready for review feedback", state)
+        continue_failed(c, id, state)
     end
   end
 
@@ -194,6 +161,37 @@ defmodule FakeRunner do
     end
   end
 
+  # A failed run goes on: with a message as new input, or without one where it stopped. One that failed on
+  # `[fake:fail]` ended itself, like an agent that answered FAILED, and needs a message.
+  defp continue_failed(c, id, state) do
+    text = String.trim(c["text"] || "")
+
+    case state[id] do
+      %{"status" => "settled", "settled" => %{"error" => "could not do it"}} when text == "" ->
+        error(c, "The agent had finished; tell it how to go on.", state)
+
+      %{"status" => "settled", "settled" => %{"outcome" => "failed"}} = run ->
+        reply(c, %{submission_id: 5, conversation_id: 1})
+
+        entries =
+          if text == "",
+            do: [],
+            else: [%{id: 5, kind: "pi.user", model: [%{role: "user", content: text}]}]
+
+        agent(id, %{type: "update", entries: entries, live: live(busy: true)})
+
+        {:ok,
+         settle(
+           Map.put(state, id, %{run | "status" => "running", "settled" => nil}),
+           id,
+           "completed"
+         )}
+
+      _ ->
+        error(c, "run #{id} is not settled", state)
+    end
+  end
+
   defp settle(state, id, outcome, error \\ nil) do
     summary = if outcome == "completed", do: "Did it.\nDONE", else: ""
     settled = %{"outcome" => outcome, "summary" => summary, "error" => error}
@@ -204,9 +202,20 @@ defmodule FakeRunner do
       model: [%{role: "assistant", content: [%{type: "text", text: summary}]}]
     }
 
-    agent(id, %{type: "message_end", entry: entry})
+    agent(id, %{type: "update", entries: [entry], live: live()})
     emit(Map.merge(%{"type" => "run_settled", "run_id" => id}, settled))
     update_in(state[id], &%{&1 | "status" => "settled", "settled" => settled})
+  end
+
+  # The live state the runner sends with a conversation's feed; idle unless told otherwise.
+  defp live(opts \\ []) do
+    %{
+      busy: Keyword.get(opts, :busy, false),
+      message: nil,
+      retry: nil,
+      tools: [],
+      inbox: Keyword.get(opts, :inbox, [])
+    }
   end
 
   defp agent(id, event),

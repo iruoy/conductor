@@ -1,16 +1,14 @@
 defmodule Conductor.Config.Settings do
-  @moduledoc "Settings configuration stored in the existing settings table."
+  @moduledoc "The global settings: the role models, the concurrency limit and how long finished workspaces are kept."
   use Ash.Resource, domain: Conductor.Config, data_layer: AshPostgres.DataLayer
 
   postgres do
     table "settings"
     repo Conductor.Repo
-    migration_types max_concurrent: :integer, prune_days: :integer
-    migration_defaults inserted_at: "nil", updated_at: "nil"
   end
 
   actions do
-    defaults [:read, :destroy, create: :*, update: :*]
+    defaults [:read, create: :*, update: :*]
   end
 
   validations do
@@ -38,9 +36,6 @@ defmodule Conductor.Config.Settings do
       allow_nil? false
       default 7
     end
-
-    create_timestamp :inserted_at, type: :utc_datetime
-    update_timestamp :updated_at, type: :utc_datetime
   end
 
   def roles, do: ~w(head low medium high)

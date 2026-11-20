@@ -1,11 +1,12 @@
 defmodule ConductorWeb.RunComponents do
   @moduledoc "Pieces shared by the run pages: the status chip, durations and times, and transcript items."
+
+  @markdown_parse_ms 250
   use Phoenix.Component
   import ConductorWeb.CoreComponents, only: [icon: 1]
 
   attr :status, :atom, required: true, doc: "a `Conductor.Runs.Run` status"
   attr :id, :string, default: nil
-  attr :class, :any, default: nil
 
   @doc """
   The status of a run as a pill with a dot, in the colours of the status: under way (`provisioning`, `running`,
@@ -19,8 +20,7 @@ defmodule ConductorWeb.RunComponents do
       data-status={@status}
       class={[
         "badge h-5 gap-[5px] whitespace-nowrap border-0 px-[7px] align-middle text-[11px] font-medium",
-        badge_class(@status),
-        @class
+        badge_class(@status)
       ]}
     >
       <span class="size-[5px] rounded-full bg-current"></span>{status_label(@status)}
@@ -83,8 +83,8 @@ defmodule ConductorWeb.RunComponents do
     Calendar.strftime(local, if(today?, do: "%H:%M", else: "%-d %b %H:%M"))
   end
 
-  @doc "The DOM id of a persisted or live transcript item."
-  def item_dom_id(conversation, entry),
+  # The DOM id of a persisted or live transcript item.
+  defp item_dom_id(conversation, entry),
     do: "ev-#{conversation}-#{String.replace(entry, ~r/[^A-Za-z0-9_-]/, "-")}"
 
   @doc "Turns a persisted `Conductor.Runs.Event` into a transcript item."
@@ -143,13 +143,11 @@ defmodule ConductorWeb.RunComponents do
     |> Enum.map(&put_results(&1, results))
   end
 
-  @doc """
-  Folds what the agent did on the way to an answer into one part of kind `work`, per turn: from what it was told
-  to the text it stopped with. The answer stays; a turn without one, as while the agent works or after it was
-  stopped, stays as it is. Returns the parts and the turn at the end, which may still get its answer: when it
-  started and what it shows so far.
-  """
-  def fold_turns(parts) do
+  # Folds what the agent did on the way to an answer into one part of kind `work`, per turn: from what it was told
+  # to the text it stopped with. The answer stays; a turn without one, as while the agent works or after it was
+  # stopped, stays as it is. Returns the parts and the turn at the end, which may still get its answer: when it
+  # started and what it shows so far.
+  defp fold_turns(parts) do
     {shown, turn} =
       Enum.reduce(parts, {[], %{started: nil, parts: []}}, fn
         %{kind: "pi.user"} = part, {shown, turn} ->
@@ -537,16 +535,13 @@ defmodule ConductorWeb.RunComponents do
   attr :note, :any, default: nil, doc: "a remark after the label, as how much of it failed"
   attr :meta, :string, default: nil, doc: "what stands at the far end, as how long it took"
   attr :streaming, :boolean, default: false, doc: "still going on: a dot pulses before the label"
-  attr :open, :boolean, default: false
   slot :inner_block, required: true
 
-  @doc """
-  A line of the transcript for what the agent did besides talking: a chevron, what it was, and how long it took at
-  the far end. It opens to show what is inside.
-  """
-  def row(assigns) do
+  # A line of the transcript for what the agent did besides talking: a chevron, what it was, and how long it took at
+  # the far end. It opens to show what is inside.
+  defp row(assigns) do
     ~H"""
-    <details id={@id} open={@open} class="rounded-field border border-base-300 bg-base-100">
+    <details id={@id} class="rounded-field border border-base-300 bg-base-100">
       <summary class={[
         "flex h-[26px] min-w-0 cursor-pointer list-none items-center gap-1.5 rounded-field px-2 text-xs",
         "text-fg-secondary transition-colors hover:text-base-content [&::-webkit-details-marker]:hidden"
@@ -635,7 +630,8 @@ defmodule ConductorWeb.RunComponents do
 
   attr :duration_ms, :any,
     default: nil,
-    doc: "recorded execution time, not wall-clock elapsed time"
+    doc:
+      "from the tool's start to its result, as Pi records it: waiting for a human and reruns included"
 
   attr :exit_code, :integer,
     default: nil,
@@ -654,7 +650,6 @@ defmodule ConductorWeb.RunComponents do
         call: call,
         # The header has one line; a call that takes more is shown whole under it.
         line: call |> String.split("\n", parts: 2) |> hd(),
-        output_html: ConductorWeb.AnsiOutput.render(assigns.output),
         written: assigns.name == "write" && is_map(assigns.args) && assigns.args["content"],
         diff: if(assigns.error, do: nil, else: assigns.diff),
         status: tool_status(assigns)
@@ -685,7 +680,7 @@ defmodule ConductorWeb.RunComponents do
           :if={valid_duration?(@duration_ms)}
           id={@id && "#{@id}-duration"}
           data-tool-duration
-          title="Recorded tool execution time"
+          title="Time from the tool's start to its result"
           class="shrink-0 tabular-nums text-fg-secondary"
         >
           {execution_duration(@duration_ms)}
@@ -733,7 +728,7 @@ defmodule ConductorWeb.RunComponents do
         data-tool-output
         phx-hook={@id && "ToolOutputScroller"}
         class={[tool_pre(), wrap()]}
-      >{@output_html}</pre>
+      >{@output}</pre>
     </div>
     """
   end
@@ -816,6 +811,7 @@ defmodule ConductorWeb.RunComponents do
   attr :submit, :string, default: "Send", doc: "what the submit button says"
   attr :accent, :boolean, default: false, doc: "the submit button stands out, as for a question"
   attr :hint, :string, default: nil, doc: "a line under the field"
+  attr :optional, :boolean, default: false, doc: "the form may be sent with an empty field"
 
   attr :disabled, :boolean,
     default: false,
@@ -847,7 +843,7 @@ defmodule ConductorWeb.RunComponents do
           id={"#{@id}-text"}
           name="text"
           rows="1"
-          required
+          required={!@optional}
           disabled={@disabled}
           placeholder={@placeholder}
           class="max-h-48 min-h-7 min-w-0 flex-1 resize-none rounded border border-line-strong bg-base-100 px-2 py-1 text-[13px] leading-[18px] text-base-content outline-none transition-colors placeholder:text-fg-tertiary focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
@@ -1197,19 +1193,32 @@ defmodule ConductorWeb.RunComponents do
 
   def awaiting?(_item), do: false
 
-  @doc """
-  Renders Markdown as HTML that is safe to show: the text comes from issues and from the agent, so HTML in it is
-  shown as text and what is left is sanitized. A line break in the text stays a line break.
-  """
-  def markdown(text) do
-    text
-    |> MDEx.to_html!(
-      extension: [strikethrough: true, table: true, autolink: true, tasklist: true],
-      render: [hardbreaks: true, escape: true],
-      syntax_highlight: nil,
-      sanitize: MDEx.Document.default_sanitize_options()
-    )
-    |> Phoenix.HTML.raw()
+  # Markdown as HTML that is safe to show: the text comes from issues and from the agent, so HTML in it is shown as
+  # text and what is left is sanitized. A line break in the text stays a line break.
+  defp markdown(text) do
+    case MDEx.to_html(text,
+           # `{...}` after inline code stays text: neither issues nor the agent write attribute syntax.
+           extension: [
+             strikethrough: true,
+             table: true,
+             autolink: true,
+             tasklist: true,
+             inline_code_attributes: false
+           ],
+           render: [hardbreaks: true, escape: true],
+           syntax_highlight: nil,
+           sanitize: MDEx.Document.default_sanitize_options(),
+           # Issue text comes from outside; a parse that takes too long is shown as plain text instead.
+           budget: [parse_time: @markdown_parse_ms]
+         ) do
+      {:ok, html} -> Phoenix.HTML.raw(html)
+      {:error, _reason} -> plain_text(text)
+    end
+  end
+
+  defp plain_text(text) do
+    html = text |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
+    Phoenix.HTML.raw("<p>" <> String.replace(html, "\n", "<br>\n") <> "</p>")
   end
 
   defp message(payload), do: List.first(payload["model"] || []) || %{}
@@ -1225,6 +1234,14 @@ defmodule ConductorWeb.RunComponents do
 
       _ ->
         ""
+    end
+  end
+
+  @doc "The tool calls an entry's message makes, as content parts."
+  def message_calls(payload) do
+    case message(payload)["content"] do
+      parts when is_list(parts) -> Enum.filter(parts, &(&1["type"] == "toolCall"))
+      _ -> []
     end
   end
 
@@ -1245,7 +1262,7 @@ defmodule ConductorWeb.RunComponents do
 
   def tool_call(_name, %{"command" => command}), do: command
   def tool_call(_name, %{"path" => path}), do: path
-  def tool_call(_name, args) when is_map(args) and args != %{}, do: Jason.encode!(args)
+  def tool_call(_name, args) when is_map(args) and args != %{}, do: JSON.encode!(args)
   def tool_call(_name, _args), do: ""
 
   def truncate(nil, _), do: ""

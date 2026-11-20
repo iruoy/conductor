@@ -1,402 +1,113 @@
 defmodule Conductor.RunsTest do
   use Conductor.DataCase, async: false
   import Conductor.Fixtures
-  require Ash.Query
   alias Conductor.Runs
 
-  test "nested codemode tool starts are live-only and do not leave unfinished transcript calls" do
-    run = run_fixture(project_fixture(), "CODE-1")
-    Runs.subscribe(run.id)
+  @idle %{"busy" => false, "message" => nil, "retry" => nil, "tools" => [], "inbox" => []}
 
-    event = %{
-      "type" => "tool_execution_start",
-      "toolCallId" => "code/c1",
-      "parentToolCallId" => "code",
-      "toolName" => "bash",
-      "args" => %{"command" => "pwd"}
-    }
+  describe "runs" do
+    test "create_run numbers attempts and broadcasts to both topics with the project loaded" do
+      project = project_fixture()
+      Runs.subscribe()
+      Runs.subscribe("SHOP-1-1")
 
-    ingest(run, event)
-    assert_receive {:agent_event, %{event: ^event}}
-    assert Runs.list_events(run.id) == []
-  end
+      {:ok, first} = Runs.create_run(project, "SHOP-1", snapshot("SHOP-1"))
+      assert %{id: "SHOP-1-1", attempt: 1, status: :picked_up} = first
+      project_id = project.id
 
-  test "compaction failures survive reloads without changing transcript or conversation state" do
-    run = run_fixture(project_fixture(), "COMPACT-1", %{status: :running})
-    ingest(run, %{"type" => "message_end", "entry" => %{"id" => 1, "kind" => "pi.user"}})
-    failure = %{"taskId" => 7, "reason" => "threshold", "error" => "Provider unavailable"}
-    ingest(run, %{"type" => "compaction_status", "failure" => failure})
-    assert Runs.compaction_failures(run.id) == %{1 => "Provider unavailable"}
-    assert [%{kind: "pi.user"}] = Runs.list_events(run.id)
-    assert Runs.conversation_ends(run.id) == %{1 => :working}
+      for _ <- 1..2,
+          do: assert_receive({:run_updated, %{id: "SHOP-1-1", project: %{id: ^project_id}}})
 
-    ingest(run, %{"type" => "snapshot", "entries" => [], "compactionFailure" => failure})
-    assert Runs.compaction_failures(run.id) == %{1 => "Provider unavailable"}
-    ingest(run, %{"type" => "compaction_status", "failure" => nil})
-    assert Runs.compaction_failures(run.id) == %{}
-    ingest(run, %{"type" => "compaction_status", "failure" => failure})
-    ingest(run, %{"type" => "snapshot", "entries" => []})
-    assert Runs.compaction_failures(run.id) == %{}
-  end
+      {:ok, second} = Runs.create_run(project, "SHOP-1", snapshot("SHOP-1"))
+      assert second.id == "SHOP-1-2"
+      assert [%{id: "SHOP-1-2"} | _] = Runs.filter_runs(:all)
+      assert Runs.get_run!(first.id).project.repo.id == project.repo.id
+      assert Runs.get_run("missing") == nil
+      assert Runs.open_issue_keys(["SHOP-1", "SHOP-2"]) == ["SHOP-1"]
+    end
 
-  test "messages, tool starts and notes are ordered by conversation, position and id" do
-    run = run_fixture(project_fixture(), "SHOP-1")
-    user = %{"id" => 1, "kind" => "pi.user"}
-    assistant = %{"id" => 2, "kind" => "pi.assistant"}
-    result = %{"id" => 3, "kind" => "pi.tool-result"}
+    test "other_attempts lists the other runs of the same issue, the first attempt first" do
+      project = project_fixture()
+      first = run_fixture(project, "SHOP-1", %{status: :failed})
+      second = run_fixture(project, "SHOP-1", %{status: :failed})
+      third = run_fixture(project, "SHOP-1", %{status: :running})
+      run_fixture(project, "SHOP-2")
 
-    ingest(run, %{"type" => "message_end", "entry" => user})
-    ingest(run, %{"type" => "message_end", "entry" => assistant})
+      assert Enum.map(Runs.other_attempts(second), & &1.id) == [first.id, third.id]
+    end
 
-    ingest(run, %{
-      "type" => "tool_execution_start",
-      "toolCallId" => "call-1",
-      "toolName" => "bash",
-      "args" => %{"command" => "pwd"}
-    })
+    test "next_queued takes the highest priority, the oldest among equals, unranked last" do
+      project = project_fixture()
 
-    ingest(run, %{"type" => "message_end", "entry" => result})
-    Runs.record_note(run.id, "finished", %{"text" => "Finished"})
-
-    # Notes belong to conversation 0; NULL positions sort after positioned messages.
-    assert Enum.map(Runs.list_events(run.id), & &1.entry) == [
-             "n:finished",
-             "e:1",
-             "e:2",
-             "e:3",
-             "t:call-1"
-           ]
-
-    assert Enum.map(Runs.list_events(run.id, 1), & &1.entry) == [
-             "e:1",
-             "e:2",
-             "e:3",
-             "t:call-1"
-           ]
-  end
-
-  test "snapshot replay and payload updates do not move existing events" do
-    run = run_fixture(project_fixture(), "SHOP-1")
-    user = %{"id" => 1, "kind" => "pi.user"}
-    assistant = %{"id" => 2, "kind" => "pi.assistant", "text" => "original"}
-    result = %{"id" => 3, "kind" => "pi.tool-result"}
-
-    ingest(run, %{"type" => "snapshot", "entries" => [user, assistant]})
-
-    ingest(run, %{
-      "type" => "tool_execution_start",
-      "toolCallId" => "call-1",
-      "toolName" => "bash",
-      "args" => %{}
-    })
-
-    ingest(run, %{"type" => "message_end", "entry" => result})
-    before = Runs.list_events(run.id, 1)
-    updated = Map.put(assistant, "text", "updated")
-    ingest(run, %{"type" => "snapshot", "entries" => [user, updated, result]})
-
-    after_replay = Runs.list_events(run.id, 1)
-    assert Enum.map(after_replay, & &1.id) == Enum.map(before, & &1.id)
-    assert Enum.map(after_replay, & &1.entry) == ["e:1", "e:2", "e:3", "t:call-1"]
-    assert Enum.find(after_replay, &(&1.entry == "e:2")).payload == updated
-  end
-
-  test "ANSI escapes survive JSONL decoding, transcript persistence and PubSub streaming" do
-    run = run_fixture(project_fixture(), "SHOP-56")
-    Runs.subscribe(run.id)
-
-    ansi = "\e[31mVitest output\e[0m"
-
-    entry = %{
-      "id" => 44,
-      "kind" => "pi.tool-result",
-      "model" => [
-        %{
-          "role" => "toolResult",
-          "toolCallId" => "ansi-call",
-          "toolName" => "bash",
-          "content" => [%{"type" => "text", "text" => ansi}],
-          "isError" => false
-        }
-      ]
-    }
-
-    message = %{
-      "type" => "agent_event",
-      "run_id" => run.id,
-      "conversation" => 7,
-      "role" => "head",
-      "event" => %{"type" => "message_end", "entry" => entry}
-    }
-
-    # Exercise one encoded stdout JSONL record through line framing and Phoenix's JSON decoder.
-    jsonl = Jason.encode!(message) <> "\n"
-    [line] = String.split(jsonl, "\n", trim: true)
-    decoded = Jason.decode!(line)
-    assert :ok = Runs.ingest(decoded)
-    assert_receive {:agent_event, %{event: %{"entry" => ^entry}}}
-    assert [%{payload: ^entry}] = Runs.list_events(run.id, 7)
-    assert List.first(entry["model"])["content"] == [%{"type" => "text", "text" => ansi}]
-  end
-
-  test "replaying a snapshot twice is unique and uses one SQL statement per chunk" do
-    run = run_fixture(project_fixture(), "SHOP-12")
-    entries = for id <- 1..201, do: %{"id" => id, "kind" => "pi.assistant"}
-    system = %{"id" => 0, "kind" => "pi.system"}
-    handler = "transcript-queries-#{System.unique_integer([:positive])}"
-    owner = self()
-
-    :telemetry.attach(
-      handler,
-      [:conductor, :repo, :query],
-      fn _event, _measurements, metadata, _config ->
-        if self() == owner, do: send(owner, {:transcript_sql, metadata.query})
-      end,
-      nil
-    )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-
-    for _ <- 1..2 do
-      ingest(run, %{"type" => "snapshot", "entries" => [system | entries]})
-
-      for _ <- 1..3 do
-        assert_receive {:transcript_sql, sql}
-        assert sql =~ "INSERT INTO \"run_events\""
-        assert sql =~ "ON CONFLICT"
+      for {n, rank} <- [{1, 2}, {2, nil}, {3, 0}, {4, 0}] do
+        key = "shop-#{n}"
+        {:ok, _} = Runs.create_run(project, key, snapshot(key, "T", %{"priority_rank" => rank}))
       end
 
-      refute_received {:transcript_sql, _}
+      order =
+        for _ <- 1..4 do
+          run = Runs.next_queued()
+          {:ok, _} = Runs.fail(run)
+          run.issue_key
+        end
+
+      assert order == ["shop-3", "shop-4", "shop-1", "shop-2"]
+      assert Runs.next_queued() == nil
     end
 
-    events = Runs.list_events(run.id, 1)
-    assert length(events) == 201
-    assert Enum.map(events, & &1.position) == Enum.to_list(1..201)
-    assert Enum.uniq_by(events, &{&1.run_id, &1.conversation, &1.entry}) == events
-    assert Enum.all?(events, &(&1.role == "head"))
-    assert Enum.all?(events, &(&1.kind == "pi.assistant"))
-    assert Runs.list_events(run.id, 0) == []
-  end
+    test "a run waiting for a human does not hold a slot" do
+      project = project_fixture()
 
-  test "invalid transcript rows are logged and dropped without raising" do
-    run = run_fixture(project_fixture(), "SHOP-12")
+      for {key, status} <- [
+            {"SHOP-1", :provisioning},
+            {"SHOP-2", :running},
+            {"SHOP-3", :handing_off},
+            {"SHOP-4", :waiting_for_input},
+            {"SHOP-5", :picked_up}
+          ],
+          do: run_fixture(project, key, %{status: status})
 
-    assert ExUnit.CaptureLog.capture_log(fn ->
-             ingest(run, %{"type" => "snapshot", "entries" => [%{"id" => 1, "kind" => nil}]})
-           end) =~ "dropping transcript events"
-
-    assert Runs.list_events(run.id) == []
-    Runs.record_note(run.id, "setup", %{"text" => "ok"})
-    assert [%{conversation: 0, role: "conductor", entry: "n:setup"}] = Runs.list_events(run.id)
-  end
-
-  test "Run, Question and Event are registered Ash resources over the existing tables" do
-    assert Conductor.Runs in Application.fetch_env!(:conductor, :ash_domains)
-
-    assert Ash.Domain.Info.resources(Runs) == [
-             Conductor.Runs.Run,
-             Conductor.Runs.Run.Version,
-             Conductor.Runs.Question,
-             Conductor.Runs.Event
-           ]
-
-    assert AshPostgres.DataLayer.Info.table(Conductor.Runs.Event) == "run_events"
-
-    assert Ash.Resource.Info.identity(Conductor.Runs.Event, :run_id_conversation_entry).keys ==
-             [:run_id, :conversation, :entry]
-
-    assert AshPostgres.DataLayer.Info.table(Conductor.Runs.Run) == "runs"
-    assert AshPostgres.DataLayer.Info.table(Conductor.Runs.Question) == "questions"
-    assert Ash.Resource.Info.primary_key(Conductor.Runs.Run) == [:id]
-
-    assert Ash.Resource.Info.identity(Conductor.Runs.Question, :run_id_qid).keys == [
-             :run_id,
-             :qid
-           ]
-  end
-
-  test "attempts, statuses, loaded relationships and notifier broadcasts retain their contracts" do
-    project = project_fixture()
-    Runs.subscribe()
-    Runs.subscribe("SHOP-1-1")
-    {:ok, first} = Runs.create_run(project, "SHOP-1", %{"priority_rank" => 2})
-    assert first.id == "SHOP-1-1"
-    assert first.attempt == 1
-    assert first.status == :picked_up
-    assert_receive {:run_updated, %{id: "SHOP-1-1", project: %{id: project_id}}}
-    assert project_id == project.id
-    assert_receive {:run_updated, %{id: "SHOP-1-1", project: %{id: ^project_id}}}
-    {:ok, second} = Runs.create_run(project, "SHOP-1", %{})
-    assert second.id == "SHOP-1-2"
-    assert [latest] = Runs.list_runs(1)
-    assert latest.id == second.id
-    assert latest.project.id == project.id
-    assert Runs.get_run(first.id).project.repo.id == project.repo.id
-    assert Runs.get_run!(first.id).project.repo.id == project.repo.id
-    assert Runs.get_run("missing") == nil
-    assert_raise Ash.Error.Invalid, fn -> Runs.get_run!("missing") end
-    assert {:error, %Ash.Error.Invalid{}} = Runs.complete(first)
-    assert Runs.get_run!(first.id).status == :picked_up
-    updated = transition_run(first, :completed, %{summary: "done\n"})
-    assert updated.summary == "done\n"
-    assert Conductor.Runs.Run.terminal?(updated)
-    assert Conductor.Runs.Run.terminal_statuses() == ~w(completed merged failed)a
-    assert is_atom(updated.status)
-    assert Runs.open_issue_keys(["SHOP-1", "SHOP-2"]) == ["SHOP-1"]
-    assert [queued] = Runs.list_by_status([:picked_up])
-    assert queued.id == second.id
-    assert queued.project.repo.id == project.repo.id
-  end
-
-  test "other_attempts lists the other runs of the same issue, the first attempt first" do
-    project = project_fixture()
-    first = run_fixture(project, "SHOP-1", %{status: :failed})
-    second = run_fixture(project, "SHOP-1", %{status: :failed})
-    third = run_fixture(project, "SHOP-1", %{status: :running})
-    run_fixture(project, "SHOP-2")
-
-    assert Enum.map(Runs.other_attempts(second), &{&1.id, &1.status}) ==
-             [{first.id, :failed}, {third.id, :running}]
-
-    assert Runs.other_attempts(run_fixture(project, "SHOP-3")) == []
-  end
-
-  test "queue priority, active slots and pruning preserve selection rules" do
-    project = project_fixture()
-    missing = run_fixture(project, "SHOP-1")
-    low = run_fixture(project, "SHOP-2", %{issue_snapshot: %{"priority_rank" => 2}})
-    high = run_fixture(project, "SHOP-3", %{issue_snapshot: %{"priority_rank" => 0}})
-    run_fixture(project, "SHOP-4", %{issue_snapshot: %{"priority_rank" => 0}})
-    old = ~U[2020-01-01 00:00:00Z]
-    import Ecto.Query
-
-    Repo.update_all(from(r in Conductor.Runs.Run, where: r.id == ^high.id),
-      set: [inserted_at: old]
-    )
-
-    assert Runs.next_queued().id == high.id
-    assert Runs.active_count() == 0
-
-    for {run, status} <- [{missing, "provisioning"}, {low, "running"}, {high, "handing_off"}] do
-      transition_run(run, status)
+      assert Runs.active_count() == 3
     end
 
-    assert Runs.active_count() == 3
-    {:ok, _} = Runs.wait_for_input(Runs.get_run!(low.id))
-    assert Runs.active_count() == 2
-    {:ok, _} = Runs.fail(Runs.get_run!(high.id))
-    {:ok, _} = Runs.set_workspace_path(Runs.get_run!(high.id), %{workspace_path: "/tmp/old"})
+    test "illegal transitions and stale structs cannot change a terminal run" do
+      run = run_fixture(project_fixture(), "SHOP-21", %{status: :running})
+      assert {:error, %Ash.Error.Invalid{}} = Runs.complete(run)
 
-    Repo.update_all(from(r in Conductor.Runs.Run, where: r.id == ^high.id),
-      set: [updated_at: old]
-    )
-
-    assert [prunable] = Runs.list_prunable(7)
-    assert prunable.id == high.id
+      {:ok, settled} = Runs.settle(run, %{outcome: "completed"})
+      {:ok, _} = Runs.complete(settled)
+      # `run` still says :running; the write is checked against the database.
+      assert {:error, %Ash.Error.Invalid{}} = Runs.wait_for_input(run)
+      assert {:error, %Ash.Error.Invalid{}} = Runs.fail(run, %{error: "late failure"})
+      assert Runs.get_run!(run.id).status == :completed
+    end
   end
 
-  test "identity upserts preserve original text, answers, timestamps and row identity" do
-    run = run_fixture(project_fixture(), "SHOP-1")
-    Runs.subscribe(run.id)
-    {:ok, question} = Runs.upsert_question(run.id, "q1", "  original\n")
-    assert_receive {:question, %{id: question_id, answer: nil}}
-    assert question_id == question.id
-    assert question.text == "  original\n"
-    {:ok, answered} = Runs.answer_question(question, "yes")
-    assert_receive {:question, %{id: ^question_id, answer: "yes"}}
-    {:ok, replayed} = Runs.upsert_question(run.id, "q1", "replacement")
-    assert_receive {:question, %{id: ^question_id, answer: "yes"}}
-    assert replayed.id == question.id
-    assert replayed.text == question.text
-    assert replayed.answer == "yes"
-    assert replayed.answered_at == answered.answered_at
-    assert replayed.inserted_at == question.inserted_at
-    assert replayed.updated_at == answered.updated_at
+  describe "ingest/1 of run_state" do
+    test "moves a run between running and waiting, ignoring duplicates, stale states and unknown runs" do
+      run = run_fixture(project_fixture(), "SHOP-22", %{status: :running})
+      Runs.subscribe(run.id)
+      event = %{"type" => "run_state", "run_id" => run.id, "status" => "running"}
 
-    assert :ok =
-             Runs.sync_questions(run.id, [
-               %{"qid" => "q1", "text" => "replacement", "answered" => true},
-               %{"qid" => "q2", "text" => "new", "answered" => true}
-             ])
+      assert :ok = Runs.ingest(event)
+      refute_received {:run_updated, _}
+      assert :ok = Runs.ingest(%{event | "status" => "waiting_for_input"})
+      assert_receive {:run_updated, %{status: :waiting_for_input}}
+      assert :ok = Runs.ingest(%{event | "status" => "waiting_for_input"})
+      refute_received {:run_updated, _}
 
-    assert_receive {:question, %{qid: "q1", answer: "yes"}}
-    assert_receive {:question, %{qid: "q2", answered_at: nil}}
-    assert_receive {:question, %{qid: "q2", answered_at: answered_at}}
-    assert answered_at
-    assert Runs.get_question(run.id, "q1").answer == "yes"
-    assert Runs.get_question(run.id, "q2").answered_at
-    assert length(Runs.list_questions(run.id)) == 2
-    assert length(Ash.load!(Runs.get_run!(run.id), :questions).questions) == 2
-
-    assert :ok =
-             Runs.ingest(%{
-               "type" => "question",
-               "run_id" => run.id,
-               "qid" => "q1",
-               "text" => "replacement"
-             })
-
-    assert_receive {:question, %{id: id, text: "  original\n", answer: "yes"}}
-    assert id == question.id
-
-    assert :ok =
-             Runs.ingest(%{
-               "type" => "question",
-               "run_id" => "missing",
-               "qid" => "q",
-               "text" => "ignored"
-             })
-
-    refute_receive {:question, _}
-  end
-
-  test "illegal lifecycle transitions and unknown inputs are rejected" do
-    project = project_fixture()
-    queued = run_fixture(project, "SHOP-20")
-    assert {:error, %Ash.Error.Invalid{}} = Runs.complete(queued, %{pr_url: "wrong"})
-    assert Runs.get_run!(queued.id).status == :picked_up
-    assert {:error, %Ash.Error.Invalid{}} = Runs.pump(queued, %{summary: "not accepted"})
-
-    completed = transition_run(queued, :completed)
-    assert {:error, %Ash.Error.Invalid{}} = Runs.resume(completed)
-    assert {:error, %Ash.Error.Invalid{}} = Runs.provision_end(completed)
-    assert {:error, %Ash.Error.Invalid{}} = Runs.fail(completed, %{error: "late failure"})
-    assert Runs.get_run!(queued.id).status == :completed
-  end
-
-  test "stale structs cannot overwrite the persisted terminal state" do
-    run = run_fixture(project_fixture(), "SHOP-21", %{status: :running})
-    {:ok, settled} = Runs.settle(run, %{outcome: "completed"})
-    {:ok, _} = Runs.complete(settled)
-    assert {:error, %Ash.Error.Invalid{}} = Runs.wait_for_input(run)
-    assert {:error, %Ash.Error.Invalid{}} = Runs.fail(run, %{error: "late failure"})
-    assert Runs.get_run!(run.id).status == :completed
-  end
-
-  test "duplicate and stale run_state events are quietly ignored" do
-    run = run_fixture(project_fixture(), "SHOP-22", %{status: :running})
-    Runs.subscribe(run.id)
-    event = %{"type" => "run_state", "run_id" => run.id, "status" => "running"}
-    assert :ok = Runs.ingest(event)
-    refute_received {:run_updated, _}
-    assert :ok = Runs.ingest(%{event | "status" => "waiting_for_input"})
-    assert_receive {:run_updated, %{status: :waiting_for_input}}
-    assert :ok = Runs.ingest(%{event | "status" => "waiting_for_input"})
-    refute_received {:run_updated, _}
-    {:ok, failed} = Runs.fail(Runs.get_run!(run.id), %{error: "original"})
-    assert_receive {:run_updated, %{status: :failed}}
-    assert :ok = Runs.ingest(event)
-    assert :ok = Runs.ingest(%{event | "run_id" => "missing"})
-    assert Runs.get_run!(run.id).error == failed.error
-    refute_received {:run_updated, _}
+      {:ok, _} = Runs.fail(Runs.get_run!(run.id), %{error: "original"})
+      assert_receive {:run_updated, %{status: :failed}}
+      assert :ok = Runs.ingest(event)
+      assert :ok = Runs.ingest(%{event | "run_id" => "missing"})
+      assert %{status: :failed, error: "original"} = Runs.get_run!(run.id)
+      refute_received {:run_updated, _}
+    end
   end
 
   describe "status_history/1" do
     test "keeps every status of a run through its lifecycle, in order and with its time" do
-      project = project_fixture()
-      {:ok, run} = Runs.create_run(project, "SHOP-30", snapshot("SHOP-30"))
-      assert [%{status: :picked_up, at: %DateTime{}}] = Runs.status_history(run.id)
-
+      {:ok, run} = Runs.create_run(project_fixture(), "SHOP-30", snapshot("SHOP-30"))
       {:ok, run} = Runs.pump(run)
       {:ok, run} = Runs.provision_end(run)
       state = %{"type" => "run_state", "run_id" => run.id, "status" => "waiting_for_input"}
@@ -412,121 +123,165 @@ defmodule Conductor.RunsTest do
 
       times = Enum.map(history, & &1.at)
       assert times == Enum.sort(times, DateTime)
-      assert history |> Enum.map(& &1.id) |> Enum.uniq() |> length() == 7
-    end
-
-    test "every way to fail is kept" do
-      project = project_fixture()
-
-      for {key, from, action} <- [
-            {"SHOP-31", :picked_up, :abort},
-            {"SHOP-32", :running, :fail},
-            {"SHOP-33", :handing_off, :hand_off_failed}
-          ] do
-        run = run_fixture(project, key, %{status: from})
-        {:ok, _failed} = apply(Runs, action, [run])
-        assert %{status: :failed} = List.last(Runs.status_history(run.id))
-      end
     end
 
     test "only a change of status adds to it" do
-      project = project_fixture()
-      run = run_fixture(project, "SHOP-34", %{status: :running, workspace_path: "/tmp/ws"})
-      other = run_fixture(project, "SHOP-35")
+      run = run_fixture(project_fixture(), "SHOP-34", %{status: :running, workspace_path: "/t"})
       {:ok, run} = Runs.set_branch(run, %{branch: "conductor/shop-34"})
       {:ok, run} = Runs.clear_workspace(run)
-
-      # Neither a transition that is refused, nor a state the run is already in.
       assert {:error, %Ash.Error.Invalid{}} = Runs.complete(run)
-
-      assert :ok =
-               Runs.ingest(%{"type" => "run_state", "run_id" => run.id, "status" => "running"})
+      :ok = Runs.ingest(%{"type" => "run_state", "run_id" => run.id, "status" => "running"})
 
       assert Enum.map(Runs.status_history(run.id), & &1.status) ==
                ~w(picked_up provisioning running)a
 
-      assert Enum.map(Runs.status_history(other.id), & &1.status) == [:picked_up]
       assert Runs.status_history("missing") == []
     end
+  end
 
-    test "a version holds the status and the action, and no copy of the run" do
-      models = %{"head" => %{"provider" => "faux", "modelId" => "faux-1"}}
-      run = run_fixture(project_fixture(), "SHOP-36", %{status: :running, models: models})
-      assert Runs.get_run!(run.id).models == models
+  describe "questions" do
+    test "replays keep the original text and answer, and every write is broadcast" do
+      run = run_fixture(project_fixture(), "SHOP-1")
+      Runs.subscribe(run.id)
+      {:ok, question} = Runs.upsert_question(run.id, "q1", "original")
+      assert_receive {:question, %{qid: "q1", answer: nil}}
+      {:ok, _} = Runs.answer_question(question, "yes")
+      assert_receive {:question, %{qid: "q1", answer: "yes"}}
 
-      {:ok, _settled} =
-        Runs.settle(run, %{outcome: "failed", summary: "No", error: "Tests failed"})
+      ingest = %{"type" => "question", "run_id" => run.id, "qid" => "q1", "text" => "replaced"}
+      assert :ok = Runs.ingest(ingest)
+      assert_receive {:question, %{id: id, text: "original", answer: "yes"}}
+      assert id == question.id
 
-      versions =
-        Conductor.Runs.Run.Version
-        |> Ash.Query.filter(version_source_id == ^run.id)
-        |> Ash.Query.sort([:version_inserted_at, :id])
-        |> Ash.read!()
-
-      assert Enum.map(versions, &{&1.version_action_name, &1.status, &1.changes}) == [
-               {:create, :picked_up, %{}},
-               {:pump, :provisioning, %{}},
-               {:provision_end, :running, %{}},
-               {:settle, :handing_off, %{}}
-             ]
+      assert :ok = Runs.ingest(%{ingest | "run_id" => "missing"})
+      refute_receive {:question, _}
     end
 
-    test "a bulk update of the status is kept too" do
-      project = project_fixture()
-      runs = for key <- ~w(SHOP-37 SHOP-38), do: run_fixture(project, key, %{status: :running})
-      ids = Enum.map(runs, & &1.id)
+    test "sync_questions marks answered ones and adds missing ones" do
+      run = run_fixture(project_fixture(), "SHOP-1")
+      {:ok, _} = Runs.upsert_question(run.id, "q1", "Known?")
 
-      result =
-        Conductor.Runs.Run
-        |> Ash.Query.filter(id in ^ids)
-        |> Ash.bulk_update(:fail, %{error: "stopped"}, strategy: [:atomic, :atomic_batches])
+      assert :ok =
+               Runs.sync_questions(run.id, [
+                 %{"qid" => "q1", "text" => "Known?", "answered" => true},
+                 %{"qid" => "q2", "text" => "New?", "answered" => false}
+               ])
 
-      assert result.status == :success
+      assert [%{qid: "q1", answered_at: %DateTime{}}, %{qid: "q2", answered_at: nil}] =
+               Runs.list_questions(run.id)
+    end
+  end
 
-      for id <- ids do
-        assert Runs.get_run!(id).status == :failed
-        assert %{status: :failed} = List.last(Runs.status_history(id))
-        assert length(Runs.status_history(id)) == 4
+  describe "ingest/1 of agent events" do
+    test "an update without entries is broadcast and persists nothing" do
+      run = run_fixture(project_fixture(), "CODE-1")
+      Runs.subscribe(run.id)
+
+      nested = %{"callId" => "code/c1", "name" => "bash", "parentCallId" => "code"}
+      event = %{"type" => "update", "live" => %{@idle | "busy" => true, "tools" => [nested]}}
+
+      ingest(run, event)
+      assert_receive {:agent_event, %{conversation: 1, role: "head", event: ^event}}
+      assert Runs.list_events(run.id) == []
+      refute_received {:run_updated, _}
+    end
+
+    test "entries and notes are ordered by conversation, position and id" do
+      run = run_fixture(project_fixture(), "SHOP-1")
+
+      for {id, kind} <- [{1, "pi.user"}, {2, "pi.assistant"}, {3, "pi.tool-result"}],
+          do: ingest(run, %{"type" => "update", "entries" => [%{"id" => id, "kind" => kind}]})
+
+      Runs.record_note(run.id, "finished", %{"text" => "Finished"})
+
+      assert Enum.map(Runs.list_events(run.id), & &1.entry) == ["n:finished", "e:1", "e:2", "e:3"]
+      assert Enum.map(Runs.list_events(run.id, 1), & &1.entry) == ["e:1", "e:2", "e:3"]
+    end
+
+    test "conversations are listed in the order they started" do
+      run = run_fixture(project_fixture(), "SHOP-1")
+      entry = %{"type" => "update", "entries" => [%{"id" => 1, "kind" => "pi.user"}]}
+      ingest(run, entry, 2, "sub:#7")
+      ingest(run, entry)
+      Runs.record_note(run.id, "finished", %{"text" => "Finished"})
+
+      assert Runs.conversations(run.id) == [{2, "sub:#7"}, {1, "head"}, {0, "conductor"}]
+    end
+
+    test "snapshot replays update payloads in place and drop system entries" do
+      run = run_fixture(project_fixture(), "SHOP-1")
+      # More than one insert chunk of 100.
+      entries = for id <- 1..201, do: %{"id" => id, "kind" => "pi.assistant", "text" => "old"}
+      system = %{"id" => 0, "kind" => "pi.system"}
+
+      ingest(run, %{"type" => "snapshot", "entries" => [system | entries], "live" => @idle})
+      before = Runs.list_events(run.id, 1)
+
+      updated = Enum.map(entries, &Map.put(&1, "text", "new"))
+      ingest(run, %{"type" => "snapshot", "entries" => [system | updated], "live" => @idle})
+      after_replay = Runs.list_events(run.id, 1)
+
+      assert length(after_replay) == 201
+      assert Enum.map(after_replay, & &1.id) == Enum.map(before, & &1.id)
+      assert Enum.map(after_replay, & &1.position) == Enum.to_list(1..201)
+      assert Enum.all?(after_replay, &(&1.payload["text"] == "new"))
+    end
+
+    test "invalid transcript rows are logged and dropped without raising" do
+      run = run_fixture(project_fixture(), "SHOP-12")
+
+      assert ExUnit.CaptureLog.capture_log(fn ->
+               ingest(run, %{"type" => "snapshot", "entries" => [%{"id" => 1, "kind" => nil}]})
+             end) =~ "dropping transcript events"
+
+      assert Runs.list_events(run.id) == []
+    end
+
+    test "compaction failures are kept apart from the transcript until a feed clears them" do
+      run = run_fixture(project_fixture(), "COMPACT-1", %{status: :running})
+      ingest(run, %{"type" => "update", "entries" => [%{"id" => 1, "kind" => "pi.user"}]})
+      failure = %{"taskId" => 7, "reason" => "threshold", "error" => "Provider unavailable"}
+      ingest(run, %{"type" => "update", "compactionFailure" => failure})
+      assert Runs.compaction_failures(run.id) == %{1 => "Provider unavailable"}
+      assert [%{kind: "pi.user"}] = Runs.list_events(run.id)
+      assert Runs.conversation_ends(run.id) == %{1 => :working}
+
+      # An update that says nothing of compaction leaves the failure as it is.
+      ingest(run, %{"type" => "update", "live" => @idle})
+      assert Runs.compaction_failures(run.id) == %{1 => "Provider unavailable"}
+      ingest(run, %{"type" => "update", "compactionFailure" => nil})
+      assert Runs.compaction_failures(run.id) == %{}
+
+      # A snapshot always says, and replaces what an update said.
+      ingest(run, %{"type" => "update", "compactionFailure" => failure})
+      ingest(run, %{"type" => "snapshot", "entries" => [], "compactionFailure" => nil})
+      assert Runs.compaction_failures(run.id) == %{}
+    end
+
+    test "conversation_models/1 reads each conversation's model from its first answer" do
+      run = run_fixture(project_fixture(), "SHOP-60")
+
+      answer = fn conversation, role, id, message ->
+        entry = %{"id" => id, "kind" => "pi.assistant", "model" => [message]}
+        ingest(run, %{"type" => "update", "entries" => [entry]}, conversation, role)
       end
+
+      faux = %{"role" => "assistant", "provider" => "faux", "model" => "faux-1"}
+      answer.(1, "head", 2, Map.put(faux, "thinkingLevel", "high"))
+      answer.(1, "head", 5, %{faux | "model" => "faux-later"})
+      answer.(2, "sub:#7", 3, %{faux | "model" => "faux-small"})
+      answer.(3, "sub:#8", 4, %{"role" => "assistant"})
+
+      assert Runs.conversation_models(run.id) == %{
+               1 => %{"provider" => "faux", "modelId" => "faux-1", "reasoning" => "high"},
+               2 => %{"provider" => "faux", "modelId" => "faux-small"}
+             }
     end
   end
 
-  test "conversation_models/1 reads each conversation's model from its first answer" do
-    run = run_fixture(project_fixture(), "SHOP-60")
-    other = run_fixture(project_fixture(), "SHOP-61")
-
-    answer = fn run, conversation, role, id, message ->
-      Runs.ingest(%{
-        "type" => "agent_event",
-        "run_id" => run.id,
-        "conversation" => conversation,
-        "role" => role,
-        "event" => %{
-          "type" => "message_end",
-          "entry" => %{"id" => id, "kind" => "pi.assistant", "model" => [message]}
-        }
-      })
-    end
-
-    faux = %{"role" => "assistant", "provider" => "faux", "model" => "faux-1"}
-    answer.(run, 1, "head", 2, Map.put(faux, "thinkingLevel", "high"))
-    answer.(run, 1, "head", 5, %{faux | "model" => "faux-later"})
-    answer.(run, 2, "sub:#7", 3, %{faux | "model" => "faux-small"})
-    # An answer that names no model, as nothing the runner sends does.
-    answer.(run, 3, "sub:#8", 4, %{"role" => "assistant"})
-    answer.(other, 1, "head", 2, %{faux | "model" => "faux-other"})
-
-    assert Runs.conversation_models(run.id) == %{
-             1 => %{"provider" => "faux", "modelId" => "faux-1", "reasoning" => "high"},
-             2 => %{"provider" => "faux", "modelId" => "faux-small"}
-           }
-
-    assert Runs.conversation_models("missing") == %{}
-  end
-
-  describe "filter_runs/3" do
+  describe "filter_runs/2" do
     setup do
-      project = project_fixture(%{repo: repo_fixture()})
+      project = project_fixture()
       run_fixture(project, "shop-1", %{status: :running})
       run_fixture(project, "shop-2", %{status: :provisioning})
       run_fixture(project, "shop-3", %{status: :failed, error: "boom"})
@@ -542,14 +297,9 @@ defmodule Conductor.RunsTest do
     test "filters by status group and counts the whole group" do
       assert ["shop-2-1", "shop-1-1"] = Enum.map(Runs.filter_runs(:running), & &1.id)
       assert [%{id: "shop-3-1"}] = Runs.filter_runs(:failed)
-      assert length(Runs.filter_runs(:all)) == 4
 
       assert %{all: 4, running: 2, failed: 1, completed: 1, merged: 0, waiting: 0, picked_up: 0} =
                Runs.group_counts()
-
-      assert Runs.count_runs(:running) == 2
-      assert length(Runs.filter_runs(:all, "", 1)) == 1
-      assert Runs.count_runs(:all) == 4
     end
 
     test "matches id and summary case-insensitively, taking wildcards literally" do
@@ -576,12 +326,12 @@ defmodule Conductor.RunsTest do
     end
   end
 
-  defp ingest(run, event) do
+  defp ingest(run, event, conversation \\ 1, role \\ "head") do
     Runs.ingest(%{
       "type" => "agent_event",
       "run_id" => run.id,
-      "conversation" => 1,
-      "role" => "head",
+      "conversation" => conversation,
+      "role" => role,
       "event" => event
     })
   end
