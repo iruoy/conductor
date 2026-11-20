@@ -122,19 +122,12 @@ function pause(env, hook, top = 100) {
   assert.equal(hook.el.scrollTop, top)
 }
 
-test("mount opens long output at its clamped end", t => {
+test("mount opens long output at its clamped end and streaming patches follow it", t => {
   const env = browser(t)
   const hook = env.mount()
   assert.equal(hook.el.scrollTop, 800)
   env.flushScroll()
-  atBottom(hook)
   assert.equal(hook.atEnd(), true)
-})
-
-test("streaming patches follow repeatedly without resize notifications", t => {
-  const env = browser(t)
-  const hook = env.mount()
-  env.flushScroll()
   for (const height of [1100, 1500, 2200]) {
     stream(hook, height)
     atBottom(hook)
@@ -157,25 +150,24 @@ test("queued programmatic scroll after content growth does not disengage follow"
   atBottom(hook)
 })
 
-test("reader scroll wins over a still-queued programmatic scroll", t => {
+test("reader scroll wins whether its scroll event is queued before or after a patch", t => {
   const env = browser(t)
-  const hook = env.mount()
-  hook.el.move(300)
+  // Our own mount scroll is still queued when the reader scrolls.
+  const early = env.mount()
+  early.el.move(300)
   env.flushScroll()
-  stream(hook, 1600)
-  assert.equal(hook.el.scrollTop, 300)
-})
+  stream(early, 1600)
+  assert.equal(early.el.scrollTop, 300)
 
-test("reader scroll pauses a patch before its queued scroll event arrives", t => {
-  const env = browser(t)
-  const hook = env.mount()
+  // The patch arrives before the reader's scroll event.
+  const late = env.mount()
   env.flushScroll()
-  hook.el.move(300)
-  stream(hook, 1600)
-  assert.equal(hook.el.scrollTop, 300)
+  late.el.move(300)
+  stream(late, 1600)
+  assert.equal(late.el.scrollTop, 300)
   env.flushScroll()
-  stream(hook, 2000)
-  assert.equal(hook.el.scrollTop, 300)
+  stream(late, 2000)
+  assert.equal(late.el.scrollTop, 300)
 })
 
 test("scrolling away pauses patches and resizing; scrolling back resumes", t => {
@@ -206,17 +198,6 @@ test("near-end tolerance resumes follow but reading well above the end does not"
   atBottom(hook)
 })
 
-test("horizontal scroll events do not disengage an otherwise following panel", t => {
-  const env = browser(t)
-  const hook = env.mount()
-  env.flushScroll()
-  hook.el.scrollLeft = 75
-  hook.el.dispatchEvent(new Event("scroll"))
-  stream(hook, 1300)
-  atBottom(hook)
-  assert.equal(hook.el.scrollLeft, 75)
-})
-
 test("empty and short output follow when they first become scrollable", t => {
   const env = browser(t)
   for (const height of [0, 80, 200]) {
@@ -231,25 +212,19 @@ test("empty and short output follow when they first become scrollable", t => {
   }
 })
 
-test("a followed panel can shrink to short output and grow again", t => {
+test("following and paused panels that shrink to short output follow when they grow again", t => {
   const env = browser(t)
-  const hook = env.mount()
+  const following = env.mount()
+  const paused = env.mount()
   env.flushScroll()
-  stream(hook, 80)
-  assert.equal(hook.el.scrollTop, 0)
-  env.flushScroll()
-  stream(hook, 900)
-  atBottom(hook)
-})
-
-test("clamping a paused panel to the end on shrink allows subsequent following", t => {
-  const env = browser(t)
-  const hook = env.mount()
-  pause(env, hook)
-  stream(hook, 80)
-  env.flushScroll()
-  stream(hook, 900)
-  atBottom(hook)
+  pause(env, paused)
+  for (const hook of [following, paused]) {
+    stream(hook, 80)
+    assert.equal(hook.el.scrollTop, 0)
+    env.flushScroll()
+    stream(hook, 900)
+    atBottom(hook)
+  }
 })
 
 test("panels maintain independent follow state", t => {
@@ -269,18 +244,16 @@ test("panels maintain independent follow state", t => {
   atBottom(reading)
 })
 
-test("following only changes local vertical position, not horizontal or outer scroll", t => {
+test("following only changes local vertical position; horizontal scrolling does not disengage it", t => {
   const env = browser(t)
   const hook = env.mount()
+  env.flushScroll()
+  hook.el.scrollLeft = 75
+  hook.el.dispatchEvent(new Event("scroll"))
   stream(hook, 1500)
   env.resize(hook.el, {viewport: 300})
-  env.flushScroll()
-  pause(env, hook)
-  stream(hook, 1800)
-  hook.el.move(hook.el.scrollHeight)
-  env.flushScroll()
-  hook.follow()
-  assert.equal(hook.el.scrollLeft, 29)
+  atBottom(hook)
+  assert.equal(hook.el.scrollLeft, 75)
   assert.deepEqual(hook.el.parentElement, {scrollTop: 420, scrollLeft: 17})
 })
 

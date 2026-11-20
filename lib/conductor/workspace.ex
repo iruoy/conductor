@@ -7,13 +7,13 @@ defmodule Conductor.Workspace do
   branch and any uncommitted work alone, so recovery after a crash continues where the agent was.
   """
 
-  def root,
+  defp root,
     do:
       Application.get_env(:conductor, :workspace_root, "~/conductor-workspaces") |> Path.expand()
 
   def path(repo, issue_key), do: Path.join([root(), "#{repo.name}-issues", issue_key])
 
-  def branch_name(issue_key, snapshot) do
+  defp branch_name(issue_key, snapshot) do
     type = String.downcase((snapshot || %{})["type"] || "")
     if String.contains?(type, "bug"), do: "bugfix/#{issue_key}", else: "feature/#{issue_key}"
   end

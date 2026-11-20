@@ -1,35 +1,11 @@
 defmodule ConductorWeb.Layouts do
-  @moduledoc """
-  This module holds layouts and related functionality
-  used by your application.
-  """
+  @moduledoc "The root layout and the app shell: header, nav, theme switch and flash messages."
   use ConductorWeb, :html
 
-  # Embed all files in layouts/* within this module.
-  # The default root.html.heex file contains the HTML
-  # skeleton of your application, namely HTML headers
-  # and other static content.
   embed_templates "layouts/*"
 
-  @doc """
-  Renders your app layout.
-
-  This function is typically invoked from every template,
-  and it often contains your application menu, sidebar,
-  or similar.
-
-  ## Examples
-
-      <Layouts.app flash={@flash}>
-        <h1>Content</h1>
-      </Layouts.app>
-
-  """
+  @doc "The app shell every LiveView renders its content in."
   attr :flash, :map, required: true, doc: "the map of flash messages"
-
-  attr :current_scope, :map,
-    default: nil,
-    doc: "the current [scope](https://phoenix.hexdocs.pm/scopes.html)"
 
   attr :current_page, :atom,
     default: nil,
@@ -64,7 +40,10 @@ defmodule ConductorWeb.Layouts do
             :if={@waiting_count > 0}
             id="nav-waiting-count"
             title={
-              ngettext("1 run waiting for input", "%{count} runs waiting for input", @waiting_count)
+              if(@waiting_count == 1,
+                do: "1 run waiting for input",
+                else: "#{@waiting_count} runs waiting for input"
+              )
             }
             class="ml-1 rounded-full bg-chip-warning-bg px-1.5 text-xs font-medium text-chip-warning-fg"
           >
@@ -96,26 +75,18 @@ defmodule ConductorWeb.Layouts do
     """
   end
 
-  @doc """
-  Shows the flash group with standard titles and content.
+  attr :flash, :map, required: true
 
-  ## Examples
-
-      <.flash_group flash={@flash} />
-  """
-  attr :flash, :map, required: true, doc: "the map of flash messages"
-  attr :id, :string, default: "flash-group", doc: "the optional id of flash container"
-
-  def flash_group(assigns) do
+  defp flash_group(assigns) do
     ~H"""
-    <div id={@id} aria-live="polite">
+    <div id="flash-group" aria-live="polite">
       <.flash kind={:info} flash={@flash} />
       <.flash kind={:error} flash={@flash} />
 
       <.flash
         id="client-error"
         kind={:error}
-        title={gettext("We can't find the internet")}
+        title="We can't find the internet"
         phx-disconnected={
           show(".phx-client-error #client-error")
           |> JS.remove_attribute("hidden", to: ".phx-client-error #client-error")
@@ -123,14 +94,14 @@ defmodule ConductorWeb.Layouts do
         phx-connected={hide("#client-error") |> JS.set_attribute({"hidden", ""})}
         hidden
       >
-        {gettext("Attempting to reconnect")}
+        Attempting to reconnect
         <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
       </.flash>
 
       <.flash
         id="server-error"
         kind={:error}
-        title={gettext("Something went wrong!")}
+        title="Something went wrong!"
         phx-disconnected={
           show(".phx-server-error #server-error")
           |> JS.remove_attribute("hidden", to: ".phx-server-error #server-error")
@@ -138,34 +109,30 @@ defmodule ConductorWeb.Layouts do
         phx-connected={hide("#server-error") |> JS.set_attribute({"hidden", ""})}
         hidden
       >
-        {gettext("Attempting to reconnect")}
+        Attempting to reconnect
         <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
       </.flash>
     </div>
     """
   end
 
-  @doc """
-  Provides dark vs light theme toggle based on themes defined in app.css.
-
-  See <head> in root.html.heex which applies the theme before page load.
-  """
-  def theme_toggle(assigns) do
+  # The theme script in root.html.heex applies the choice before the page loads.
+  defp theme_toggle(assigns) do
     ~H"""
     <%!-- aria-pressed is kept in sync by the theme script in root.html.heex, so LiveView must leave it alone. --%>
     <div
       id="theme-toggle"
       role="group"
-      aria-label={gettext("Theme")}
+      aria-label="Theme"
       class="flex items-center gap-0.5"
       phx-update="ignore"
     >
       <button
         :for={
           {theme, label, icon} <- [
-            {"light", gettext("Use light theme"), "hero-sun-micro"},
-            {"system", gettext("Use system theme"), "hero-computer-desktop-micro"},
-            {"dark", gettext("Use dark theme"), "hero-moon-micro"}
+            {"light", "Use light theme", "hero-sun-micro"},
+            {"system", "Use system theme", "hero-computer-desktop-micro"},
+            {"dark", "Use dark theme", "hero-moon-micro"}
           ]
         }
         id={"theme-#{theme}"}

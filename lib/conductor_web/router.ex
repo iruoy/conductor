@@ -10,10 +10,6 @@ defmodule ConductorWeb.Router do
     plug :put_secure_browser_headers
   end
 
-  pipeline :api do
-    plug :accepts, ["json"]
-  end
-
   scope "/", ConductorWeb do
     pipe_through :browser
 
@@ -23,9 +19,4 @@ defmodule ConductorWeb.Router do
       live "/config", ConfigLive
     end
   end
-
-  # Other scopes may use custom stacks.
-  # scope "/api", ConductorWeb do
-  #   pipe_through :api
-  # end
 end

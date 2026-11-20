@@ -1,6 +1,6 @@
 import Config
 
-config :ash, disable_async?: true, policies: [show_policy_breakdowns?: true]
+config :ash, disable_async?: true
 
 # Postgrex requires socket_dir rather than hostname for Unix-socket connections.
 pg_host = System.get_env("PGHOST") || "localhost"
@@ -9,11 +9,7 @@ config :conductor,
        Conductor.Repo,
        if(Path.type(pg_host) == :absolute, do: [socket_dir: pg_host], else: [hostname: pg_host])
 
-# Configure your database
-#
-# The MIX_TEST_PARTITION environment variable can be used
-# to provide built-in test partitioning in CI environment.
-# Run `mix help test` for more information.
+# MIX_TEST_PARTITION gives each test partition its own database.
 config :conductor, Conductor.Repo,
   username: System.get_env("PGUSER") || "postgres",
   password: System.get_env("PGPASSWORD") || "postgres",
@@ -22,8 +18,6 @@ config :conductor, Conductor.Repo,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
-# We don't run a server during test. If one is required,
-# you can enable the server option below.
 config :conductor, ConductorWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "Ms8H53EOgIe4cF+wQIWl/QXRBOGBPdlwQzlp/5UoUoW8cYoa+xvgPGJDAxFwAZdp",

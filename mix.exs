@@ -5,7 +5,7 @@ defmodule Conductor.MixProject do
     [
       app: :conductor,
       version: "0.1.0",
-      elixir: "~> 1.16",
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       consolidate_protocols: Mix.env() != :dev,
@@ -43,14 +43,13 @@ defmodule Conductor.MixProject do
     [
       {:tidewave, "~> 0.9", only: [:dev]},
       {:dotenvy, "~> 1.1", only: :dev},
-      {:ash, "~> 3.34"},
-      {:ash_postgres, "~> 2.14"},
+      {:ash, "~> 3.37"},
+      {:ash_postgres, "~> 2.16"},
       {:ash_phoenix, "~> 2.3"},
-      {:ash_state_machine, "~> 0.2.13"},
+      {:ash_state_machine, "~> 0.3.1"},
       {:ash_paper_trail, "~> 0.8.0"},
-      {:picosat_elixir, "~> 0.2.3"},
       {:sourceror, "~> 1.8", only: [:dev, :test]},
-      {:phoenix, "~> 1.8.8"},
+      {:phoenix, "~> 1.8.16"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, ">= 0.0.0"},
@@ -67,22 +66,14 @@ defmodule Conductor.MixProject do
        app: false,
        compile: false,
        depth: 1},
-      {:telemetry_metrics, "~> 1.0"},
-      {:telemetry_poller, "~> 1.0"},
-      {:gettext, "~> 1.0"},
-      {:jason, "~> 1.2"},
-      {:dns_cluster, "~> 0.3.1"},
-      {:erlexec, "~> 2.5"},
+      {:erlexec, "~> 2.6"},
       {:bandit, "~> 1.5"},
-      {:req, "~> 0.5"},
-      {:mdex, "~> 0.14.2"},
+      {:req, "~> 0.7"},
+      {:mdex, "~> 0.14.7"},
       {:makeup, "~> 1.2"},
       {:makeup_elixir, "~> 1.0"},
-      {:makeup_erlang, "~> 1.1"},
       {:makeup_html, "~> 1.0"},
       {:makeup_eex, "~> 2.0"},
-      {:makeup_diff, "~> 0.1.1"},
-      {:makeup_json, "~> 1.0"},
       {:makeup_syntect, "~> 0.1.4"}
     ]
   end
@@ -95,8 +86,14 @@ defmodule Conductor.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
-      "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
+      setup: [
+        "deps.get",
+        "cmd --cd runner pnpm install",
+        "ecto.setup",
+        "assets.setup",
+        "assets.build"
+      ],
+      "ecto.setup": ["ecto.create", "ecto.migrate"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
@@ -112,6 +109,7 @@ defmodule Conductor.MixProject do
         "format",
         "ash.codegen --check",
         "cmd node --test assets/js/tool_output_scroller.test.mjs",
+        "cmd --cd runner pnpm typecheck",
         "cmd --cd runner pnpm test",
         "test --warnings-as-errors"
       ]
