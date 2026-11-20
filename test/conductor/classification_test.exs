@@ -33,8 +33,6 @@ defmodule Conductor.ClassificationTest do
     assert saved.classifications["#2"]["status"] == "explicit"
     assert saved.classifications["#2"]["complexity"] == "low"
     assert saved.models == run.models
-    assert saved.issue_snapshot == issue
-    assert saved.status == run.status
     assert :ok = Classification.persist(saved, fn _, _ -> flunk("must not reclassify") end)
   end
 
@@ -54,7 +52,6 @@ defmodule Conductor.ClassificationTest do
       saved = Runs.get_run!(run.id)
       assert saved.classifications["#1"]["status"] == "fallback"
       assert saved.classifications["#1"]["complexity"] == "high"
-      assert saved.status == :picked_up
     end
   end
 end

@@ -55,17 +55,9 @@ defmodule ConductorWeb.ConfigLiveTest do
     # Model choices come from the runner.
     assert render(view) =~ "Faux 1"
 
-    # Choosing a model offers its reasoning levels and selects its default one.
     view
     |> form("#settings-form", settings: %{models: %{head: %{model: "faux/faux-1"}}})
     |> render_change(%{"_target" => ["settings", "models", "head", "model"]})
-
-    assert has_element?(view, "#reasoning-head option[value=high][selected]")
-    assert has_element?(view, "#reasoning-head option[value=low]")
-    refute has_element?(view, "#reasoning-head option[value=medium]")
-    # A chosen model always has a level; only a role without a model can leave it unset.
-    refute has_element?(view, "#reasoning-head option[value='']")
-    assert has_element?(view, "#reasoning-low option[value='']")
 
     view
     |> form("#settings-form",
@@ -93,7 +85,10 @@ defmodule ConductorWeb.ConfigLiveTest do
     assert Config.list_repos() == []
   end
 
-  test "validates and updates repository and project Ash forms", %{conn: conn, tmp_dir: dir} do
+  test "repository and project edits are validated before they are saved", %{
+    conn: conn,
+    tmp_dir: dir
+  } do
     stub_github()
     start_workers(dir)
     repo = repo_fixture()
@@ -120,7 +115,7 @@ defmodule ConductorWeb.ConfigLiveTest do
     assert Config.get_project!(project.id).project_number == 2
   end
 
-  test "typed model forms retain choices on errors and support fallback and saved models", %{
+  test "model settings keep choices on errors and support fallback and saved models", %{
     conn: conn,
     tmp_dir: dir
   } do
@@ -137,7 +132,7 @@ defmodule ConductorWeb.ConfigLiveTest do
     assert has_element?(view, "#model-head option[value='saved/unlisted'][selected]")
     assert has_element?(view, "#reasoning-head option[value='medium'][selected]")
 
-    # Reasoning levels become available only after choosing each role's model.
+    # Choosing a model offers its own reasoning levels and selects its default one.
     view
     |> form("#settings-form",
       settings: %{
@@ -148,6 +143,9 @@ defmodule ConductorWeb.ConfigLiveTest do
 
     assert has_element?(view, "#reasoning-head option[value='high'][selected]")
     assert has_element?(view, "#reasoning-low option[value='low']")
+    refute has_element?(view, "#reasoning-head option[value='medium']")
+    # A chosen model always has a level; only a role without a model can leave it unset.
+    refute has_element?(view, "#reasoning-head option[value='']")
 
     for role <- ~w(medium high) do
       assert view |> element("#model-#{role} option[value='']") |> render() =~ "Same as head"
