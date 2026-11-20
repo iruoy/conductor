@@ -3,36 +3,33 @@
 // Phoenix takes the model a conversation ran on (a subagent's is picked by its task's complexity) from the `provider`,
 // `model` and `thinkingLevel` of the assistant messages in its `agent_event`s; nothing else reports it.
 import { isAbsolute } from "node:path";
-import type { Context } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type Models, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
-	type AgentEvent,
-	type CompactionFailure,
 	type SessionEnd,
-	LiveDoc,
-	type AgentEventStream,
+	type Conversation,
 	type ConversationId,
 	configure,
 	type Extension,
-	type EntryId,
 	createRegistry,
 	Harness,
 	type SettledSubmissionRecord,
 	type Storage,
+	type SubmissionDraft,
 	type SubmissionId,
-	watchEvents,
+	type TaskId,
+	LiveDoc,
+	type Tx,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { type ConversationFeed, watchConversation } from "./conversation-feed.ts";
 import { agentChoice, answerText, createConductorExtensions, type GithubConfig, githubFromEnv } from "./agent.ts";
 import { createExecutionTools } from "./execution-tools.ts";
 import { probeDefaultLevel } from "./defaults.ts";
 import { classifyIssue, parseIssue } from "./classifier.ts";
-import { contextPage, environmentSecrets } from "./context-inspection.ts";
-import { type GithubRun, type ModelMap, type RunRecord, RunsDoc, type Settled } from "./state.ts";
+import { type GithubRun, HumanAnswer, type ModelMap, type RunRecord, RunsDoc, type Settled } from "./state.ts";
 
-export const VERSION = "0.1.0";
 
 export type Event = Record<string, unknown> & { type: string };
 export type Command = { id?: string | number; type: string; [key: string]: unknown };
@@ -42,13 +39,11 @@ export type RunnerOptions = {
 	models: Models;
 	emit: (event: Event) => void;
 	github?: GithubConfig;
-	context?: Context;
-	inspectionSecrets?: () => readonly string[];
+	/** How often a failed model request is retried; 5 times by default. */
+	retry?: { maxRetries: number };
 };
 
-export class ProtocolError extends Error {}
-
-const ctx = BACKGROUND_CONTEXT;
+class ProtocolError extends Error {}
 
 export class Runner {
 	private harness!: Harness;
@@ -56,28 +51,25 @@ export class Runner {
 	private readonly execution = createExecutionTools();
 	private readonly emitEvent: (event: Event) => void;
 	private readonly models: Models;
-	private readonly inspectionSecrets: readonly string[];
-	private readonly inspectionSecretsCallback?: () => readonly string[];
-	private seq = 0;
 	private readonly locks = new Map<string, Promise<unknown>>();
 	private readonly tracking = new Set<string>();
-	private readonly streams = new Map<string, Map<number, AgentEventStream>>();
+	private readonly streams = new Map<string, Map<number, ConversationFeed>>();
 	private readonly defaults = new Map<string, ModelThinkingLevel>();
-	private resumed: string[] = [];
 	private closed = false;
 
 	private constructor(options: RunnerOptions) {
 		this.models = options.models;
 		this.emitEvent = options.emit;
-		this.inspectionSecretsCallback = options.inspectionSecrets;
-		this.inspectionSecrets = [options.github?.token ?? githubFromEnv()?.token, ...environmentSecrets()].filter((v): v is string => Boolean(v));
 	}
 
 	static async open(options: RunnerOptions): Promise<Runner> {
 		const runner = new Runner(options);
 		const { head: conductor, subagent } = createConductorExtensions(
 			{
-				question: (runId, qid, text) => runner.emit({ type: "question", run_id: runId, qid, text }),
+				question: (runId, qid, text) => {
+					runner.emit({ type: "question", run_id: runId, qid, text });
+					runner.emit({ type: "run_state", run_id: runId, status: "waiting_for_input" });
+				},
 				child: (runId, key, conversationId) =>
 					void runner.attach(runId, conversationId, `sub:${key}`).catch((error) =>
 						runner.emit({ type: "log", level: "error", message: `attach ${runId} sub:${key}: ${error}` }),
@@ -96,14 +88,14 @@ export class Runner {
 			{
 				models: options.models,
 				registry,
-				settings: { extensions: [CodingTools, ...runner.execution.extensions], retry: { maxRetries: 5 } },
+				settings: { extensions: [CodingTools, ...runner.execution.extensions], retry: { maxRetries: 5, ...options.retry } },
 				env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? process.cwd() }),
-				onReport: (error) => runner.emit({ type: "log", level: "error", message: String(error) }),
+				onReport: (report) => runner.emit({ type: "log", level: "error", message: `${report.kind}: ${String(report.error)}` }),
 			},
-			options.context ?? ctx,
+			ctx,
 		);
 		void runner.harness.closed.then((end) => {
-			if (end.reason === "failed") {
+			if (end.kind === "failed") {
 				runner.closed = true;
 				void runner.execution.sandbox.close();
 				runner.emit({ type: "log", level: "error", message: "Runner storage failed; restarting from durable state." });
@@ -111,31 +103,16 @@ export class Runner {
 		});
 		runner.conductor = conductor;
 		const state = await runner.state();
-		// Existing conversations select extensions explicitly. Add the new tools before resumed work runs,
-		// preserving their model choices and any tools previously activated through tool_search.
-		for (const run of Object.values(state.runs)) {
-			await runner.harness.commit(async (tx) => {
-				await configure(tx, run.conversationId as ConversationId, {
-					extensions: [CodingTools, ...runner.execution.extensions, conductor],
-				});
-				for (const child of Object.values(run.children)) {
-					await configure(tx, child.conversationId as ConversationId, {
-						extensions: [CodingTools, ...runner.execution.extensions, subagent],
-					});
-				}
-			}, ctx);
-		}
 		runner.harness.resume();
-		runner.resumed = Object.keys(state.runs).filter((id) => state.runs[id]!.status === "running");
-		for (const runId of runner.resumed) runner.track(runId);
-		runner.emit({ type: "ready", version: VERSION, resumed: runner.resumed });
+		// A run waiting on a parked `ask_human` call still has its submission open, so it is followed too.
+		for (const [runId, run] of Object.entries(state.runs)) {
+			if (run.status === "running" || Object.values(run.questions).some((q) => !q.answered && q.taskId !== undefined)) runner.track(runId);
+		}
 		return runner;
 	}
 
 	async handle(command: Command): Promise<unknown> {
 		switch (command.type) {
-			case "hello":
-				return { version: VERSION, resumed: this.resumed };
 			case "classify_issue": {
 				const runId = str(command, "run_id");
 				const issue = parseIssue(command.issue);
@@ -157,8 +134,6 @@ export class Runner {
 				return this.abort(str(command, "run_id"));
 			case "sync":
 				return this.sync();
-			case "inspect_context":
-				return this.inspectContext(command);
 			default:
 				throw new ProtocolError(`unknown command ${command.type}`);
 		}
@@ -168,9 +143,9 @@ export class Runner {
 	async dispatch(command: Command): Promise<void> {
 		try {
 			const result = await this.handle(command);
-			this.emitRaw({ type: "reply", id: command.id ?? null, ok: true, result: result ?? null });
+			this.emitEvent({ type: "reply", id: command.id ?? null, ok: true, result: result ?? null });
 		} catch (error) {
-			this.emitRaw({ type: "reply", id: command.id ?? null, ok: false, error: (error as Error).message ?? String(error) });
+			this.emitEvent({ type: "reply", id: command.id ?? null, ok: false, error: (error as Error).message ?? String(error) });
 		}
 	}
 
@@ -233,6 +208,7 @@ export class Runner {
 					models,
 					...(github ? { github } : {}),
 					submissionId: null,
+					messages: [],
 					status: "running",
 					aborted: false,
 					questions: {},
@@ -244,10 +220,11 @@ export class Runner {
 			const run = (await this.run(runId))!;
 			if (run.submissionId === null) {
 				const conversation = (await this.harness.conversation(conversationId as ConversationId, ctx))!;
-				const submission = await conversation.submit({ type: "input", content: prompt, requestId: `start:${runId}` }, ctx);
-				await this.update(runId, (r) => {
-					r.submissionId ??= submission.id as number;
-				});
+				// The prompt is admitted in the commit that records it, so no restart finds one without the other.
+				await this.harness.commit(async (tx) => {
+					const submissionId = await conversation.submit(tx, { type: "input", content: prompt, requestId: `start:${runId}` });
+					(await tx.doc(RunsDoc)).runs[runId]!.submissionId ??= submissionId as number;
+				}, ctx);
 			}
 			if (run.status === "running") {
 				this.emit({ type: "run_state", run_id: runId, status: "running" });
@@ -267,18 +244,33 @@ export class Runner {
 			if (run.status === "settled") throw new ProtocolError(`run ${runId} is settled`);
 			const question = run.questions[qid];
 			if (question === undefined) throw new ProtocolError(`unknown question ${qid}`);
+			if (question.taskId !== undefined) return this.answerParked(runId, qid, question.taskId, text);
+			// The runner's own question (the agent stopped without a verdict): the answer starts another turn.
 			const conversation = (await this.harness.conversation(run.conversationId as ConversationId, ctx))!;
 			const content = `A human answered your question.\n\nQuestion: ${question.text}\n\nAnswer: ${text}`;
-			const submission = await conversation.submit({ type: "input", content, requestId: `answer:${qid}` }, ctx);
-			await this.update(runId, (r) => {
+			const submissionId = await this.submitAndUpdate(conversation, { type: "input", content, requestId: `answer:${qid}` }, runId, (r, id) => {
 				r.questions[qid]!.answered = true;
-				r.submissionId = submission.id as number;
+				r.submissionId = id;
 				r.status = "running";
 			});
 			this.emit({ type: "run_state", run_id: runId, status: "running" });
 			this.track(runId);
-			return { submission_id: submission.id };
+			return { submission_id: submissionId };
 		});
+	}
+
+	/** Wakes the parked `ask_human` call with the answer; the run goes on once no other question waits. */
+	private async answerParked(runId: string, qid: string, taskId: number, text: string) {
+		const running = await this.harness.commit(async (tx) => {
+			const result = await tx.signal(taskId as TaskId, HumanAnswer, qid, { text });
+			if (result !== "delivered" && result !== "duplicate") throw new ProtocolError(`question ${qid} is no longer open`);
+			const run = (await tx.doc(RunsDoc)).runs[runId]!;
+			run.questions[qid]!.answered = true;
+			if (Object.values(run.questions).every((q) => q.answered)) run.status = "running";
+			return run.status === "running";
+		}, ctx);
+		if (running) this.emit({ type: "run_state", run_id: runId, status: "running" });
+		return {};
 	}
 
 	/**
@@ -293,39 +285,46 @@ export class Runner {
 			if (run === undefined) throw new ProtocolError(`unknown run ${runId}`);
 			if (run.status !== "running") throw new ProtocolError(`run ${runId} is not running`);
 			const conversation = (await this.harness.conversation(run.conversationId as ConversationId, ctx))!;
-			const submission = await conversation.submit({ type: "input", content: text, whenBusy: "steer" }, ctx);
-			await this.update(runId, (r) => {
+			const submissionId = await this.submitAndUpdate(conversation, { type: "input", content: text, whenBusy: "steer" }, runId, (r, id) => {
 				// A new list: pushing onto one assigned in the same step would bypass the draft.
-				r.messages = [...(r.messages ?? []), submission.id as number];
+				r.messages = [...r.messages, id];
 			});
 			this.track(runId);
-			return { submission_id: submission.id };
+			return { submission_id: submissionId };
 		});
 	}
 
-	/** Review feedback starts another turn in the original durable conversation and workspace. */
+	/**
+	 * Starts another turn of a settled run in its own conversation and workspace: review feedback for a completed run,
+	 * and for a failed one a message, or without one Pi's `continue`, which picks up where the failed run stopped.
+	 */
 	private resumeRun(command: Command) {
 		const runId = str(command, "run_id");
-		const text = str(command, "text");
-		if (text.trim() === "") throw new ProtocolError("empty review feedback");
+		const text = typeof command.text === "string" ? command.text.trim() : "";
 		return this.serial(runId, async () => {
 			const run = await this.run(runId);
-			if (run?.status !== "settled" || run.settled?.outcome !== "completed") {
-				throw new ProtocolError(`run ${runId} is not ready for review feedback`);
-			}
+			if (run?.status !== "settled") throw new ProtocolError(`run ${runId} is not settled`);
+			if (run.settled?.outcome === "completed" && text === "") throw new ProtocolError("empty review feedback");
 			const conversation = await this.harness.conversation(run.conversationId as ConversationId, ctx);
 			if (!conversation) throw new ProtocolError(`missing conversation for ${runId}`);
 			await this.attach(runId, run.conversationId, "head");
-			const submission = await conversation.submit({ type: "input", content: text }, ctx);
-			await this.update(runId, (r) => {
-				r.submissionId = submission.id as number;
+			const draft = async (tx: Tx): Promise<SubmissionDraft> => {
+				if (text !== "") return { type: "input", content: text };
+				// Only a run that failed has somewhere to pick up again; one the agent ended needs to be told what next.
+				if ((await tx.doc(LiveDoc, conversation.id)).runFailure === undefined) {
+					throw new ProtocolError("The agent had finished; tell it how to go on.");
+				}
+				return { type: "continue" };
+			};
+			const submissionId = await this.submitAndUpdate(conversation, draft, runId, (r, id) => {
+				r.submissionId = id;
 				r.messages = [];
 				r.status = "running";
 				r.settled = null;
 				r.aborted = false;
 			});
 			this.track(runId);
-			return { submission_id: submission.id, conversation_id: run.conversationId };
+			return { submission_id: submissionId, conversation_id: run.conversationId };
 		});
 	}
 
@@ -339,31 +338,12 @@ export class Runner {
 			});
 			const conversation = await this.harness.conversation(run.conversationId as ConversationId, ctx);
 			await conversation?.abort(ctx);
-			// A run waiting for input has no submission left to settle it.
-			if (run.status === "waiting_for_input") await this.settle(runId, { outcome: "failed", summary: "", error: "aborted" });
+			// A run waiting on the runner's own question has no submission left to settle it; a parked `ask_human`
+			// call is part of the run, which the abort settles.
+			const parked = Object.values(run.questions).some((q) => !q.answered && q.taskId !== undefined);
+			if (run.status === "waiting_for_input" && !parked) await this.settle(runId, { outcome: "failed", summary: "", error: "aborted" });
 			return { status: "aborting" };
 		});
-	}
-
-	/** A historical context read only: no fork, submit, configure or commit. All failures are intentionally generic. */
-	private async inspectContext(command: Command) {
-		try {
-			const run = await this.run(str(command, "run_id"));
-			const conversationId = command.conversation;
-			const entry = command.entry;
-			const offset = command.offset ?? 0;
-			if (!run || !positiveInteger(conversationId) || !positiveInteger(entry) ||
-				typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 ||
-				(run.conversationId !== conversationId && !Object.values(run.children).some((c) => c.conversationId === conversationId))) {
-				throw new Error("Invalid inspection");
-			}
-			const conversation = await this.harness.conversation(conversationId as ConversationId, ctx);
-			if (!conversation) throw new Error("Missing conversation");
-			const view = await conversation.context(ctx, { at: entry as EntryId });
-			return contextPage(view, conversationId, entry, offset, [...this.inspectionSecrets, ...environmentSecrets(), ...(this.inspectionSecretsCallback?.() ?? [])]);
-		} catch {
-			throw new ProtocolError("Unable to inspect context");
-		}
 	}
 
 	private async sync() {
@@ -371,11 +351,9 @@ export class Runner {
 		return {
 			runs: Object.entries(state.runs).map(([runId, run]) => ({
 				run_id: runId,
-				conversation_id: run.conversationId,
 				status: run.status,
 				settled: run.settled,
 				questions: Object.entries(run.questions).map(([qid, q]) => ({ qid, text: q.text, answered: q.answered })),
-				children: Object.values(run.children),
 			})),
 		};
 	}
@@ -431,10 +409,11 @@ export class Runner {
 	): Promise<void> {
 		const run = (await this.run(runId))!;
 		// An answer or a message submitted meanwhile is tracked on its own; that tracker decides.
-		if (run.status !== "running" || run.submissionId !== decided.submissionId) return;
+		// A run aborted while `ask_human` waited is still marked waiting; it settles all the same.
+		if (run.status === "settled" || run.submissionId !== decided.submissionId) return;
 		if (messagesAfter(run, decided.submissionId).length !== decided.messages) return;
 		if (run.aborted) return this.settle(runId, { outcome: "failed", summary: "", error: "aborted" });
-		if (settled.status !== "done" || settled.type !== "input") {
+		if (settled.status !== "done" || settled.type === "write") {
 			// Messages still waiting for the agent must not start work on a run that has failed.
 			if (messagesAfter(run, decided.submissionId).length > 0) {
 				await (await this.harness.conversation(run.conversationId as ConversationId, ctx))?.abort(ctx);
@@ -443,9 +422,6 @@ export class Runner {
 			return this.settle(runId, { outcome: "failed", summary: "", error: reason || "the run ended without an answer" });
 		}
 		const text = await answerText(this.harness, settled.answer, ctx);
-		const open = Object.entries(run.questions).filter(([, q]) => !q.answered);
-		if (open.length > 0) return this.wait(runId, open);
-
 		const verdict = parseVerdict(text);
 		if (verdict !== undefined) return this.settle(runId, { ...verdict, summary: text });
 		// No verdict: hand the final message to a human, who can answer it or abort.
@@ -480,24 +456,18 @@ export class Runner {
 		}, 50);
 	}
 
-	/** Streams one conversation's agent events, starting with a snapshot. Attaching twice is a no-op. */
+	/** Streams one conversation's feed, starting with its snapshot. Attaching twice is a no-op. */
 	private async attach(runId: string, conversationId: number, role: string): Promise<void> {
 		let streams = this.streams.get(runId);
 		if (streams === undefined) this.streams.set(runId, (streams = new Map()));
 		if (streams.has(conversationId)) return;
-		const stream = await watchEvents(this.harness, conversationId as ConversationId, ctx);
+		const conversation = await this.harness.conversation(conversationId as ConversationId, ctx);
+		if (conversation === undefined) throw new Error(`missing conversation ${conversationId}`);
+		const stream = await watchConversation(conversation, ctx);
 		streams.set(conversationId, stream);
-		const send = (event: AgentEvent | { type: "compaction_status"; failure: CompactionFailure | null }) =>
-			this.emit({ type: "agent_event", run_id: runId, conversation: conversationId, role, event });
+		const send = (event: unknown) => this.emit({ type: "agent_event", run_id: runId, conversation: conversationId, role, event });
 		send(stream.snapshot);
-		stream.start(async (events) => {
-			for (const event of events) send(event);
-			if (events.some((event) => event.type === "compaction_end")) {
-				// An aborted/no-op compaction does not clear an earlier failure. Read the authoritative state.
-				const live = await this.harness.snapshot(LiveDoc, conversationId as ConversationId, ctx);
-				send({ type: "compaction_status", failure: live?.compactionFailure ?? null });
-			}
-		});
+		stream.start(async (update) => send(update));
 	}
 
 	// ─── State helpers ──────────────────────────────────────────────────────
@@ -508,6 +478,21 @@ export class Runner {
 
 	private async run(runId: string): Promise<Readonly<RunRecord> | undefined> {
 		return (await this.state()).runs[runId];
+	}
+
+	/** Admits a submission in the commit that records it in the run, so a restart never finds one without the other. */
+	private submitAndUpdate(
+		conversation: Conversation,
+		draft: SubmissionDraft | ((tx: Tx) => Promise<SubmissionDraft>),
+		runId: string,
+		change: (run: RunRecord, submissionId: number) => void,
+	): Promise<number> {
+		return this.harness.commit(async (tx) => {
+			const submission = typeof draft === "function" ? await draft(tx) : draft;
+			const submissionId = (await conversation.submit(tx, submission)) as number;
+			change((await tx.doc(RunsDoc)).runs[runId]!, submissionId);
+			return submissionId;
+		}, ctx);
 	}
 
 	private update(runId: string, change: (run: RunRecord) => void): Promise<void> {
@@ -528,10 +513,6 @@ export class Runner {
 	}
 
 	private emit(event: Event): void {
-		this.emitRaw({ ...event, seq: ++this.seq });
-	}
-
-	private emitRaw(event: Event): void {
 		this.emitEvent(event);
 	}
 }
@@ -550,11 +531,7 @@ export function parseVerdict(text: string): Pick<Settled, "outcome" | "error"> |
 
 /** The messages sent since a submission: submission ids only grow. */
 function messagesAfter(run: Readonly<RunRecord>, submissionId: number | null): number[] {
-	return (run.messages ?? []).filter((id) => submissionId !== null && id > submissionId);
-}
-
-function positiveInteger(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+	return run.messages.filter((id) => submissionId !== null && id > submissionId);
 }
 
 function str(command: Command, key: string): string {

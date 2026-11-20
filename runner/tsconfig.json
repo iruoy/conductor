@@ -11,8 +11,7 @@
     "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true,
     "types": ["node"],
-    "rootDir": "src",
-    "outDir": "dist"
+    "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "test"]
 }

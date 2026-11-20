@@ -15,11 +15,13 @@ export type Audit = {
 	latency_ms: number;
 	usage?: { [K in keyof Usage]: Usage[K] };
 };
-export const ClassifierDoc = defineDoc<{ runs: Record<string, Record<string, Audit>> }>({
+const ClassifierDoc = defineDoc<{ runs: Record<string, Record<string, Audit>> }>({
 	kind: "conductor.classifier",
 	version: 1,
 	scope: "session",
 	initial: () => ({ runs: {} }),
+	// Changes are stored as deltas; nothing here needs a checkpoint.
+	checkpointWhen: () => false,
 });
 const criteria = {
 	low: "Small localized change with little risk",

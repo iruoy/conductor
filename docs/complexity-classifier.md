@@ -10,7 +10,7 @@ CONDUCTOR_CLASSIFIER_MODEL=gpt-6-luna
 OPENAI_API_KEY=... # use secret management, not source control
 ```
 
-This is an example from the installed pi-ai 1.1.0 catalogue, not a guarantee of provider entitlement. The runner verifies `getModelOfType`, `checkAuth`, and `getAvailableOfType` before calling `Models.classify` (the same models abstraction supplied to pi-durable). OpenAI Decisions uses `/v1/decisions` and **requires an API key**; ChatGPT subscription OAuth is rejected. pi's `PI_AUTH_PATH`/`~/.pi/agent/auth.json` API-key credentials are also supported. Other registered classifier providers can be selected with their own API-key credentials. Catalogue presence alone does not prove remote availability.
+This is an example from the pi-ai catalogue, not a guarantee of provider entitlement. The runner verifies `getModelOfType`, `checkAuth`, and `getAvailableOfType` before calling `Models.classify` (the same models abstraction supplied to pi-durable). OpenAI Decisions uses `/v1/decisions` and **requires an API key**; ChatGPT subscription OAuth is rejected. pi's `PI_AUTH_PATH`/`~/.pi/agent/auth.json` API-key credentials are also supported. Other registered classifier providers can be selected with their own API-key credentials. Catalogue presence alone does not prove remote availability.
 
 Only issues without Size are sent for classification. Their titles/descriptions, parent, siblings and subtasks provide context; these may contain private project text, so enable only with an approved provider. One batch covers the issue tree, bounded to 4.5 seconds (Phoenix waits at most 7 seconds). Missing credentials, unavailable models, malformed answers, timeouts and provider failures retain existing routing.
 
