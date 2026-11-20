@@ -1,28 +1,14 @@
 defmodule Conductor.Config.Project do
-  @moduledoc "Project configuration stored in the existing projects table."
+  @moduledoc "A GitHub Project whose issues Conductor picks up for a repository, and the statuses of its workflow."
   use Ash.Resource, domain: Conductor.Config, data_layer: AshPostgres.DataLayer
 
   postgres do
     table "projects"
     repo Conductor.Repo
 
-    migration_types project_owner: :string,
-                    runner_login: :string,
-                    pickup_status: :string,
-                    active_status: :string,
-                    handoff_status: :string,
-                    done_status: :string,
-                    item_filter: :string,
-                    project_number: :integer
-
-    migration_defaults inserted_at: "nil", updated_at: "nil"
-
     references do
       reference :repo, on_delete: :restrict
     end
-
-    identity_index_names repo_id_project_owner_project_number:
-                           "projects_repo_id_project_owner_project_number_index"
 
     foreign_key_names [
       {:project_number, "runs_project_id_fkey", "has runs and cannot be deleted"}
@@ -91,9 +77,6 @@ defmodule Conductor.Config.Project do
       allow_nil? false
       default true
     end
-
-    create_timestamp :inserted_at, type: :utc_datetime
-    update_timestamp :updated_at, type: :utc_datetime
   end
 
   relationships do

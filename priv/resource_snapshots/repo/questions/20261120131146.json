@@ -22,7 +22,7 @@
       "scale": null,
       "size": null,
       "source": "qid",
-      "type": "string"
+      "type": "text"
     },
     {
       "allow_nil?": false,
@@ -62,7 +62,7 @@
     },
     {
       "allow_nil?": false,
-      "default": "nil",
+      "default": "fragment(\"(now() AT TIME ZONE 'utc')\")",
       "generated?": false,
       "precision": null,
       "primary_key?": false,
@@ -70,18 +70,6 @@
       "scale": null,
       "size": null,
       "source": "inserted_at",
-      "type": "utc_datetime"
-    },
-    {
-      "allow_nil?": false,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "updated_at",
       "type": "utc_datetime"
     },
     {
@@ -115,7 +103,7 @@
       "scale": null,
       "size": null,
       "source": "run_id",
-      "type": "string"
+      "type": "text"
     }
   ],
   "base_filter": null,
@@ -124,7 +112,7 @@
   "custom_indexes": [],
   "custom_statements": [],
   "has_create_action": true,
-  "hash": "90262C2A7E79564E672DBD5867643F6CA21766655FF6BA1A296EAAD002B18F1E",
+  "hash": "B8D12CEAABA378AD041F7FC5B311329C5B61938D009D3F45557347D60B024F24",
   "identities": [
     {
       "all_tenants?": false,

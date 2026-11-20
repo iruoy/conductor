@@ -1,20 +1,11 @@
 defmodule Conductor.Config.Repository do
-  @moduledoc "Repository configuration stored in the existing repos table."
+  @moduledoc "A repository runs work in: where to clone it from, its base branch, setup script and test command."
   use Ash.Resource, domain: Conductor.Config, data_layer: AshPostgres.DataLayer
 
   postgres do
     table "repos"
     repo Conductor.Repo
 
-    migration_types name: :string,
-                    clone_url: :string,
-                    owner: :string,
-                    slug: :string,
-                    base_branch: :string,
-                    test_command: :string
-
-    migration_defaults inserted_at: "nil", updated_at: "nil"
-    identity_index_names name: "repos_name_index"
     foreign_key_names [{:name, "projects_repo_id_fkey", "is used by a project"}]
   end
 
@@ -61,9 +52,6 @@ defmodule Conductor.Config.Repository do
     attribute :test_command, :string do
       public? true
     end
-
-    create_timestamp :inserted_at, type: :utc_datetime
-    update_timestamp :updated_at, type: :utc_datetime
   end
 
   identities do

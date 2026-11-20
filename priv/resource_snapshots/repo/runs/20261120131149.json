@@ -10,7 +10,7 @@
       "scale": null,
       "size": null,
       "source": "id",
-      "type": "string"
+      "type": "text"
     },
     {
       "allow_nil?": false,
@@ -22,7 +22,7 @@
       "scale": null,
       "size": null,
       "source": "issue_key",
-      "type": "string"
+      "type": "text"
     },
     {
       "allow_nil?": false,
@@ -34,7 +34,7 @@
       "scale": null,
       "size": null,
       "source": "attempt",
-      "type": "integer"
+      "type": "bigint"
     },
     {
       "allow_nil?": true,
@@ -58,7 +58,7 @@
       "scale": null,
       "size": null,
       "source": "workspace_path",
-      "type": "string"
+      "type": "text"
     },
     {
       "allow_nil?": true,
@@ -70,7 +70,7 @@
       "scale": null,
       "size": null,
       "source": "branch",
-      "type": "string"
+      "type": "text"
     },
     {
       "allow_nil?": true,
@@ -82,7 +82,7 @@
       "scale": null,
       "size": null,
       "source": "outcome",
-      "type": "string"
+      "type": "text"
     },
     {
       "allow_nil?": true,
@@ -118,7 +118,7 @@
       "scale": null,
       "size": null,
       "source": "pr_url",
-      "type": "string"
+      "type": "text"
     },
     {
       "allow_nil?": true,
@@ -146,7 +146,7 @@
     },
     {
       "allow_nil?": false,
-      "default": "nil",
+      "default": "fragment(\"(now() AT TIME ZONE 'utc')\")",
       "generated?": false,
       "precision": null,
       "primary_key?": false,
@@ -158,7 +158,7 @@
     },
     {
       "allow_nil?": false,
-      "default": "nil",
+      "default": "fragment(\"(now() AT TIME ZONE 'utc')\")",
       "generated?": false,
       "precision": null,
       "primary_key?": false,
@@ -170,7 +170,7 @@
     },
     {
       "allow_nil?": false,
-      "default": "nil",
+      "default": "\"picked_up\"",
       "generated?": false,
       "precision": null,
       "primary_key?": false,
@@ -178,7 +178,7 @@
       "scale": null,
       "size": null,
       "source": "status",
-      "type": "string"
+      "type": "text"
     },
     {
       "allow_nil?": false,
@@ -222,29 +222,6 @@
       "all_tenants?": false,
       "concurrently": false,
       "error_fields": [
-        "issue_key"
-      ],
-      "fields": [
-        {
-          "type": "atom",
-          "value": "issue_key"
-        }
-      ],
-      "include": null,
-      "include_base_filter?": true,
-      "message": null,
-      "name": "runs_issue_key_index",
-      "nulls_distinct": true,
-      "prefix": null,
-      "table": null,
-      "unique": false,
-      "using": null,
-      "where": null
-    },
-    {
-      "all_tenants?": false,
-      "concurrently": false,
-      "error_fields": [
         "status"
       ],
       "fields": [
@@ -256,7 +233,7 @@
       "include": null,
       "include_base_filter?": true,
       "message": null,
-      "name": "runs_status_index",
+      "name": null,
       "nulls_distinct": true,
       "prefix": null,
       "table": null,
@@ -267,7 +244,7 @@
   ],
   "custom_statements": [],
   "has_create_action": true,
-  "hash": "A3B232A32E1F1DDE98B11F29E38D987615BE611E71CE9A2D1330E0A768B9E09C",
+  "hash": "6F3EF3A82D9619DB89A6228DEF1EC344461E69175016D7255DC1CE8E463B931A",
   "identities": [
     {
       "all_tenants?": false,

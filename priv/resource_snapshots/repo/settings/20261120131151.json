@@ -34,7 +34,7 @@
       "scale": null,
       "size": null,
       "source": "max_concurrent",
-      "type": "integer"
+      "type": "bigint"
     },
     {
       "allow_nil?": false,
@@ -46,31 +46,7 @@
       "scale": null,
       "size": null,
       "source": "prune_days",
-      "type": "integer"
-    },
-    {
-      "allow_nil?": false,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "inserted_at",
-      "type": "utc_datetime"
-    },
-    {
-      "allow_nil?": false,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "updated_at",
-      "type": "utc_datetime"
+      "type": "bigint"
     }
   ],
   "base_filter": null,
@@ -79,7 +55,7 @@
   "custom_indexes": [],
   "custom_statements": [],
   "has_create_action": true,
-  "hash": "DFFA89B349260D63136C1777DC06CFF00724DE3D378124575F37C31A3BDB906E",
+  "hash": "ADB0BA1FBC0F4AC061E413A7E9B7609C5E23998B0F82FCE625BCA7E42BC39982",
   "identities": [],
   "multitenancy": {
     "attribute": null,

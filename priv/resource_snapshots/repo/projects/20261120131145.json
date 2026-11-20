@@ -21,70 +21,82 @@
       "references": null,
       "scale": null,
       "size": null,
-      "source": "name",
-      "type": "string"
-    },
-    {
-      "allow_nil?": false,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "clone_url",
-      "type": "string"
-    },
-    {
-      "allow_nil?": false,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "owner",
-      "type": "string"
-    },
-    {
-      "allow_nil?": false,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "slug",
-      "type": "string"
-    },
-    {
-      "allow_nil?": true,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "base_branch",
-      "type": "string"
-    },
-    {
-      "allow_nil?": true,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "setup_script",
+      "source": "project_owner",
       "type": "text"
     },
     {
+      "allow_nil?": false,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "runner_login",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "pickup_status",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "active_status",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "nil",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "handoff_status",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "\"Done\"",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "done_status",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "0",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "project_number",
+      "type": "bigint"
+    },
+    {
       "allow_nil?": true,
       "default": "nil",
       "generated?": false,
@@ -93,8 +105,20 @@
       "references": null,
       "scale": null,
       "size": null,
-      "source": "test_command",
-      "type": "string"
+      "source": "item_filter",
+      "type": "text"
+    },
+    {
+      "allow_nil?": false,
+      "default": "true",
+      "generated?": false,
+      "precision": null,
+      "primary_key?": false,
+      "references": null,
+      "scale": null,
+      "size": null,
+      "source": "enabled",
+      "type": "boolean"
     },
     {
       "allow_nil?": false,
@@ -102,23 +126,32 @@
       "generated?": false,
       "precision": null,
       "primary_key?": false,
-      "references": null,
+      "references": {
+        "deferrable": false,
+        "destination_attribute": "id",
+        "destination_attribute_default": null,
+        "destination_attribute_generated": null,
+        "index?": false,
+        "index_where": null,
+        "match_tenant?": false,
+        "match_type": null,
+        "match_with": null,
+        "multitenancy": {
+          "attribute": null,
+          "global": null,
+          "strategy": null
+        },
+        "name": "projects_repo_id_fkey",
+        "on_delete": "restrict",
+        "on_update": null,
+        "primary_key?": true,
+        "schema": "public",
+        "table": "repos"
+      },
       "scale": null,
       "size": null,
-      "source": "inserted_at",
-      "type": "utc_datetime"
-    },
-    {
-      "allow_nil?": false,
-      "default": "nil",
-      "generated?": false,
-      "precision": null,
-      "primary_key?": false,
-      "references": null,
-      "scale": null,
-      "size": null,
-      "source": "updated_at",
-      "type": "utc_datetime"
+      "source": "repo_id",
+      "type": "bigint"
     }
   ],
   "base_filter": null,
@@ -127,19 +160,27 @@
   "custom_indexes": [],
   "custom_statements": [],
   "has_create_action": true,
-  "hash": "D369EFA7212A47784EFA92CC9586E73742BA80984C22DBEFA4CE3060B4884E8F",
+  "hash": "1F9FFBFD711C8C3ACF1B44907DE1A5A9AF72516728AFCE96F605977D5DBA615A",
   "identities": [
     {
       "all_tenants?": false,
       "base_filter": null,
-      "index_name": "repos_name_index",
+      "index_name": "projects_repo_id_project_owner_project_number_index",
       "keys": [
         {
           "type": "atom",
-          "value": "name"
+          "value": "repo_id"
+        },
+        {
+          "type": "atom",
+          "value": "project_owner"
+        },
+        {
+          "type": "atom",
+          "value": "project_number"
         }
       ],
-      "name": "name",
+      "name": "repo_id_project_owner_project_number",
       "nils_distinct?": true,
       "where": null
     }
@@ -151,6 +192,6 @@
   },
   "repo": "Elixir.Conductor.Repo",
   "schema": null,
-  "table": "repos",
+  "table": "projects",
   "temporal": null
 }
