@@ -41,7 +41,6 @@ defmodule Conductor.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
-      {:tidewave, "~> 0.9", only: [:dev]},
       {:dotenvy, "~> 1.1", only: :dev},
       {:ash, "~> 3.37"},
       {:ash_postgres, "~> 2.16"},
