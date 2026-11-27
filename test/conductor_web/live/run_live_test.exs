@@ -87,6 +87,11 @@ defmodule ConductorWeb.RunLiveTest do
       assert has_element?(view, "details#live-thinking:not([open])", "Thought")
       refute has_element?(view, "#live script")
 
+      # A task list keeps its checkboxes, which cannot be toggled.
+      streaming.("- [x] done\n- [ ] todo", "Let me see")
+      assert has_element?(view, "#live .prose li input[type=checkbox][checked][disabled]")
+      assert has_element?(view, "#live .prose li input[type=checkbox][disabled]:not([checked])")
+
       # The transcript and what streams in share one scroller.
       assert has_element?(view, "#transcript-scroller[phx-hook] [role=log] #transcript")
       assert has_element?(view, "#transcript-scroller [role=log] #live")
