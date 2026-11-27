@@ -2,6 +2,17 @@ defmodule ConductorWeb.RunComponents do
   @moduledoc "Pieces shared by the run pages: the status chip, durations and times, and transcript items."
 
   @markdown_parse_ms 250
+
+  # The default sanitizer drops `<input>`, and with it the checkbox of a task list item. Raw HTML in the text is
+  # already escaped, so the only input is a task list's, and it is always made a checkbox that cannot be toggled.
+  @markdown_sanitize Keyword.merge(MDEx.Document.default_sanitize_options(),
+                       add_tags: ["input"],
+                       add_tag_attributes: %{"input" => ["checked"]},
+                       set_tag_attribute_values: %{
+                         "input" => %{"type" => "checkbox", "disabled" => ""}
+                       }
+                     )
+
   use Phoenix.Component
   import ConductorWeb.CoreComponents, only: [icon: 1]
 
@@ -1207,7 +1218,7 @@ defmodule ConductorWeb.RunComponents do
            ],
            render: [hardbreaks: true, escape: true],
            syntax_highlight: nil,
-           sanitize: MDEx.Document.default_sanitize_options(),
+           sanitize: @markdown_sanitize,
            # Issue text comes from outside; a parse that takes too long is shown as plain text instead.
            budget: [parse_time: @markdown_parse_ms]
          ) do
