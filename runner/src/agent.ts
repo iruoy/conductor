@@ -182,7 +182,7 @@ export function createConductorExtensions(
 		execute: async (args, api, context) => {
 			const qid = `q${api.taskId}`;
 			const answer = await api.readSignal(HumanAnswer, qid, context);
-			if (answer !== undefined && "value" in answer) return { output: [{ type: "text", text: answer.value.text }] };
+			if (answer?.kind === "value") return { output: [{ type: "text", text: answer.value.text }] };
 			const runId = await runIdOf(api, context);
 			await api.commit(async (tx) => {
 				const run = (await tx.doc(RunsDoc)).runs[runId]!;
@@ -190,7 +190,7 @@ export function createConductorExtensions(
 				run.status = "waiting_for_input";
 			}, context);
 			hooks.question(runId, qid, args.question);
-			return { sleep: { signals: [HumanAnswer.key(qid)] } };
+			return { kind: "sleep", signals: [HumanAnswer.key(qid)] };
 		},
 	});
 

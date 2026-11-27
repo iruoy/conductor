@@ -222,7 +222,7 @@ export class Runner {
 				const conversation = (await this.harness.conversation(conversationId as ConversationId, ctx))!;
 				// The prompt is admitted in the commit that records it, so no restart finds one without the other.
 				await this.harness.commit(async (tx) => {
-					const submissionId = await conversation.submit(tx, { type: "input", content: prompt, requestId: `start:${runId}` });
+					const submissionId = await conversation.admit(tx, { type: "input", content: prompt, requestId: `start:${runId}` });
 					(await tx.doc(RunsDoc)).runs[runId]!.submissionId ??= submissionId as number;
 				}, ctx);
 			}
@@ -489,7 +489,7 @@ export class Runner {
 	): Promise<number> {
 		return this.harness.commit(async (tx) => {
 			const submission = typeof draft === "function" ? await draft(tx) : draft;
-			const submissionId = (await conversation.submit(tx, submission)) as number;
+			const submissionId = (await conversation.admit(tx, submission)) as number;
 			change((await tx.doc(RunsDoc)).runs[runId]!, submissionId);
 			return submissionId;
 		}, ctx);
