@@ -34,10 +34,13 @@ defmodule Conductor.Runner do
       System.find_executable(executable) || (File.exists?(executable) && executable) ||
         raise "runner executable #{executable} not found"
 
+    # The runner's stderr comes through the port (logged below), not the terminal: Node restores the
+    # terminal modes of a TTY stdio when it exits, which, after the VM has gone, clobbers the shell's.
     port =
       Port.open({:spawn_executable, path}, [
         :binary,
         :exit_status,
+        :stderr_to_stdout,
         {:line, 1_048_576},
         args: Keyword.get(config, :args, []),
         env: for({k, v} <- Keyword.get(config, :env, []), do: {to_charlist(k), to_charlist(v)}),
@@ -81,9 +84,9 @@ defmodule Conductor.Runner do
       {:ok, message} ->
         {:noreply, handle_message(message, state)}
 
+      # Anything that is not a message is what the runner writes to stderr as Node dies (fatal errors).
       {:error, _} ->
-        {:noreply,
-         tap(state, fn _ -> Logger.warning("runner: unparseable line #{inspect(line)}") end)}
+        {:noreply, tap(state, fn _ -> Logger.warning("runner: #{line}") end)}
     end
   end
 
@@ -115,7 +118,14 @@ defmodule Conductor.Runner do
   end
 
   defp handle_message(%{"type" => "log"} = log, state) do
-    Logger.log(if(log["level"] == "error", do: :error, else: :info), "runner: #{log["message"]}")
+    level =
+      case log["level"] do
+        "error" -> :error
+        "warning" -> :warning
+        _ -> :info
+      end
+
+    Logger.log(level, "runner: #{log["message"]}")
     state
   end
 
